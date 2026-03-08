@@ -238,8 +238,63 @@ void AddBlock(int x, int y, int z, string type) {
     worldBlocks[posKey(x, y, z)] = type;
 }
 
-void AddLotsOfBlocks(int x, int y, int z, int len, int height, int width, string type){
+void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, int width, string type) {
+    for (int dz = 0; dz < len; ++dz) {
+        for (int dy = 0; dy < height; ++dy) {
+            for (int dx = 0; dx < width; ++dx) {
+                int x = startX + dx;
+                int y = startY - dy;
+                int z = startZ + dz;
+                AddBlock(x, y, z, type);
+            }
+        }
+    }
+}
 
+void GenerateChunk(int x, int z){
+    AddLotsOfBlocks(x * 16  , 0, z * 16  , 16, 1,  16, "grass");
+    AddLotsOfBlocks(x * 16  , -1, z * 16  ,  16, 3,  16, "dirt");
+    AddLotsOfBlocks(x * 16  , -4, z * 16  ,  16, 5,  16, "stone");
+}
+
+bool TryAdjacentChunk(int x, int z){
+    std::string key = posKey(x, 0, z);
+    return worldBlocks.find(key) != worldBlocks.end();
+}
+
+void GenerateUnloadedChunks() {
+    // Use floor division — correct for negative coords too
+    int px = static_cast<int>(std::floor(playerX / 16.0f));
+    int pz = static_cast<int>(std::floor(playerZ / 16.0f));
+
+    // Small view distance — generate chunks in 5×5 area around player (adjust as needed)
+    const int VIEW_CHUNKS = 1;   // 5×5 = -2..+2 around player chunk
+
+    for (int dx = -VIEW_CHUNKS; dx <= VIEW_CHUNKS; ++dx) {
+        for (int dz = -VIEW_CHUNKS; dz <= VIEW_CHUNKS; ++dz) {
+            int cx = px + dx;
+            int cz = pz + dz;
+
+            // Simple check: see if bottom layer of this chunk has any block
+            // (you can improve this later with a set of generated chunks)
+            bool chunkExists = false;
+            for (int lx = 0; lx < 16 && !chunkExists; ++lx) {
+                for (int lz = 0; lz < 16 && !chunkExists; ++lz) {
+                    int wx = cx * 16 + lx;
+                    int wz = cz * 16 + lz;
+                    if (worldBlocks.find(posKey(wx, -4, wz)) != worldBlocks.end()) {
+                        chunkExists = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!chunkExists) {
+                GenerateChunk(cx, cz);
+                std::cout << "Generated chunk at (" << cx << ", " << cz << ")\n";
+            }
+        }
+    }
 }
 
 int main(int argc,char* argv[])
@@ -269,15 +324,7 @@ int main(int argc,char* argv[])
     GLuint grassSide = LoadTexture("grass.png");
     GLuint dirt = LoadTexture("dirt.png");
 
-    AddBlock(0, 0, 0, "grass");
-    AddBlock(1, 0, 0, "grass");
-    AddBlock(2, 0, 0, "grass");
-    AddBlock(0, 0, 1, "grass");
-    AddBlock(1, 0, 1, "grass");
-    AddBlock(2, 0, 1, "grass");
-    AddBlock(0, 0, 2, "grass");
-    AddBlock(1, 0, 2, "grass");
-    AddBlock(2, 0, 2, "grass");
+    GenerateChunk(0,0);
 
     playerX=0;
     playerY=0;
@@ -286,7 +333,7 @@ int main(int argc,char* argv[])
     yaw=0;
     pitch=0;
 
-    float speed= 1.0f;
+    float speed= 2.5f;
     float damper = 0.4f;
 
     Uint64 NOW = SDL_GetPerformanceCounter();
@@ -349,6 +396,8 @@ int main(int argc,char* argv[])
         if (state[SDL_SCANCODE_LSHIFT]) {
             playerY -= speed * deltaTime;
         }
+
+        GenerateUnloadedChunks();
 
         glClearColor(0.5f,0.7f,1.0f,1);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
