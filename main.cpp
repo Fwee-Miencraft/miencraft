@@ -30,6 +30,22 @@ unordered_map<std::string, int> KeyMapper = {
 };
 unordered_map<string, GLuint> Textures = {};
 
+std::unordered_map<std::string, std::string> worldBlocks;
+
+// Helper to make key
+std::string posKey(int x, int y, int z) {
+    return std::to_string(x) + "_" + std::to_string(y) + "_" + std::to_string(z);
+}
+
+bool isSolid(int x, int y, int z) {
+    std::string key = posKey(x, y, z);
+    auto it = worldBlocks.find(key);
+    if (it == worldBlocks.end()) return false;           // air = not solid
+    std::string type = it->second;
+    // Add "air" or transparent types later; for now assume everything is solid
+    return type != "air";  // or check against a set of transparent types
+}
+
 GLuint LoadTexture(const char* file)
 {
     SDL_Surface* raw = IMG_Load(file);
@@ -93,60 +109,70 @@ void InitOpenGL(int width, int height)
     glEnable(GL_TEXTURE_2D);
 }
 
-void DrawCube(GLuint top, GLuint side, GLuint bottom, float x, float y, float z)
+void DrawCube(GLuint topTex, GLuint sideTex, GLuint bottomTex,
+              int worldX, int worldY, int worldZ)
 {
-    glPushMatrix();
-    glTranslatef(x, y, z);
-
-    // Sides (front/back/left/right)
-    glBindTexture(GL_TEXTURE_2D, side);
+    // Sides
+    glBindTexture(GL_TEXTURE_2D, sideTex);
     glBegin(GL_QUADS);
 
-    // Front
-    glTexCoord2f(0,1); glVertex3f(-0.5,-0.5, 0.5);
-    glTexCoord2f(1,1); glVertex3f( 0.5,-0.5, 0.5);
-    glTexCoord2f(1,0); glVertex3f( 0.5, 0.5, 0.5);
-    glTexCoord2f(0,0); glVertex3f(-0.5, 0.5, 0.5);
+    // Front (+Z face)
+    if (!isSolid(worldX, worldY, worldZ + 1)) {
+        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f, 0.5f);
+        glTexCoord2f(1,1); glVertex3f( 0.5f,-0.5f, 0.5f);
+        glTexCoord2f(1,0); glVertex3f( 0.5f, 0.5f, 0.5f);
+        glTexCoord2f(0,0); glVertex3f(-0.5f, 0.5f, 0.5f);
+    }
 
-    // Back
-    glTexCoord2f(0,1); glVertex3f( 0.5,-0.5,-0.5);
-    glTexCoord2f(1,1); glVertex3f(-0.5,-0.5,-0.5);
-    glTexCoord2f(1,0); glVertex3f(-0.5, 0.5,-0.5);
-    glTexCoord2f(0,0); glVertex3f( 0.5, 0.5,-0.5);
+    // Back (-Z face)
+    if (!isSolid(worldX, worldY, worldZ - 1)) {
+        glTexCoord2f(0,1); glVertex3f( 0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,1); glVertex3f(-0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,0); glVertex3f(-0.5f, 0.5f,-0.5f);
+        glTexCoord2f(0,0); glVertex3f( 0.5f, 0.5f,-0.5f);
+    }
 
-    // Left
-    glTexCoord2f(0,1); glVertex3f(-0.5,-0.5,-0.5);
-    glTexCoord2f(1,1); glVertex3f(-0.5,-0.5, 0.5);
-    glTexCoord2f(1,0); glVertex3f(-0.5, 0.5, 0.5);
-    glTexCoord2f(0,0); glVertex3f(-0.5, 0.5,-0.5);
+    // Left (-X)
+    if (!isSolid(worldX - 1, worldY, worldZ)) {
+        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,1); glVertex3f(-0.5f,-0.5f, 0.5f);
+        glTexCoord2f(1,0); glVertex3f(-0.5f, 0.5f, 0.5f);
+        glTexCoord2f(0,0); glVertex3f(-0.5f, 0.5f,-0.5f);
+    }
 
-    // Right
-    glTexCoord2f(0,1); glVertex3f(0.5,-0.5, 0.5);
-    glTexCoord2f(1,1); glVertex3f(0.5,-0.5,-0.5);
-    glTexCoord2f(1,0); glVertex3f(0.5, 0.5,-0.5);
-    glTexCoord2f(0,0); glVertex3f(0.5, 0.5, 0.5);
+    // Right (+X)
+    if (!isSolid(worldX + 1, worldY, worldZ)) {
+        glTexCoord2f(0,1); glVertex3f(0.5f,-0.5f, 0.5f);
+        glTexCoord2f(1,1); glVertex3f(0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,0); glVertex3f(0.5f, 0.5f,-0.5f);
+        glTexCoord2f(0,0); glVertex3f(0.5f, 0.5f, 0.5f);
+    }
 
     glEnd();
 
-    // Top
-    glBindTexture(GL_TEXTURE_2D, top);   // ← explicit re-bind
+    // Top (+Y)
+    glBindTexture(GL_TEXTURE_2D, topTex);
     glBegin(GL_QUADS);
-    glTexCoord2f(0,1); glVertex3f(-0.5,0.5, 0.5);
-    glTexCoord2f(1,1); glVertex3f( 0.5,0.5, 0.5);
-    glTexCoord2f(1,0); glVertex3f( 0.5,0.5,-0.5);
-    glTexCoord2f(0,0); glVertex3f(-0.5,0.5,-0.5);
+    if (!isSolid(worldX, worldY + 1, worldZ)) {
+        glTexCoord2f(0,1); glVertex3f(-0.5f,0.5f, 0.5f);
+        glTexCoord2f(1,1); glVertex3f( 0.5f,0.5f, 0.5f);
+        glTexCoord2f(1,0); glVertex3f( 0.5f,0.5f,-0.5f);
+        glTexCoord2f(0,0); glVertex3f(-0.5f,0.5f,-0.5f);
+    }
     glEnd();
 
-    // Bottom
-    glBindTexture(GL_TEXTURE_2D, bottom);  // ← explicit re-bind
+    // Bottom (-Y)
+    glBindTexture(GL_TEXTURE_2D, bottomTex);
     glBegin(GL_QUADS);
-    glTexCoord2f(0,1); glVertex3f(-0.5,-0.5,-0.5);
-    glTexCoord2f(1,1); glVertex3f( 0.5,-0.5,-0.5);
-    glTexCoord2f(1,0); glVertex3f( 0.5,-0.5, 0.5);
-    glTexCoord2f(0,0); glVertex3f(-0.5,-0.5, 0.5);
+    if (!isSolid(worldX, worldY - 1, worldZ)) {
+        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,1); glVertex3f( 0.5f,-0.5f,-0.5f);
+        glTexCoord2f(1,0); glVertex3f( 0.5f,-0.5f, 0.5f);
+        glTexCoord2f(0,0); glVertex3f(-0.5f,-0.5f, 0.5f);
+    }
     glEnd();
 
-    glPopMatrix();
+    glPopMatrix();  // assuming push was done before
 }
 
 std::tuple<string, string, string> Find_tuple(string Index_name) {
@@ -169,7 +195,7 @@ std::tuple<string, string, string> Find_tuple(string Index_name) {
     return {"error.png", "error.png", "error.png"};  // safe fallback
 }
 
-void RenderCube(float x, float y, float z, std::string type) {
+void RenderCube(float wx, float wy, float wz, std::string type) {
     auto tup = Find_tuple(type);
     string top    = std::get<0>(tup);
     string side   = std::get<1>(tup);
@@ -180,8 +206,8 @@ void RenderCube(float x, float y, float z, std::string type) {
     GLuint b = Textures[bottom];
 
     glPushMatrix();
-    glTranslatef(x, y, z);
-    DrawCube(t, s, b, 0,0,0);  // or pass x,y,z to DrawCube if you want
+    glTranslatef(static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(wz));
+    DrawCube(t, s, b, wx, wy, wz);   // now passes world pos
     glPopMatrix();
 }
 
@@ -211,6 +237,18 @@ int main(int argc,char* argv[])
     GLuint grassTop = LoadTexture("grass_top.png");
     GLuint grassSide = LoadTexture("grass.png");
     GLuint dirt = LoadTexture("dirt.png");
+
+    worldBlocks[posKey(0,0,0)] = "grass";
+    worldBlocks[posKey(1,0,0)] = "grass";
+    worldBlocks[posKey(2,0,0)] = "grass";
+    
+    worldBlocks[posKey(0,0,1)] = "grass";
+    worldBlocks[posKey(1,0,1)] = "grass";
+    worldBlocks[posKey(2,0,1)] = "grass";
+
+    worldBlocks[posKey(0,0,2)] = "grass";
+    worldBlocks[posKey(1,0,2)] = "grass";
+    worldBlocks[posKey(2,0,2)] = "grass";
 
     playerX=0;
     playerY=0;
