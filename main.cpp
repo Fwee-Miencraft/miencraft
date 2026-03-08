@@ -50,10 +50,12 @@ bool isSolid(int x, int y, int z) {
 
 GLuint LoadTexture(const char* file)
 {
-    SDL_Surface* raw = IMG_Load(file);
+    string basepath = SDL_GetBasePath();
+    string fullpath = basepath + "Assets/" +file;
+    SDL_Surface* raw = IMG_Load(fullpath.c_str());
     if (!raw) {
         std::cout << "Failed to load " << file << ": " << SDL_GetError() << std::endl;
-        return 0;
+        raw = IMG_Load("error.png");
     }
 
     // Convert to RGBA32 → OpenGL expects this byte order reliably
@@ -237,7 +239,7 @@ void AddBlock(int x, int y, int z, string type) {
 }
 
 void AddLotsOfBlocks(int x, int y, int z, int len, int height, int width, string type){
-    
+
 }
 
 int main(int argc,char* argv[])
