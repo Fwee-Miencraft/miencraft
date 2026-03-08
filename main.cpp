@@ -242,7 +242,7 @@ int main(int argc,char* argv[])
             if(event.type==SDL_EVENT_KEY_DOWN)
             {
                 if (event.key.key==SDLK_ESCAPE){
-                    SDL_SetWindowRelativeMouseMode(window, false);
+                    return 0;
                 }
             }
             if (event.type == SDL_EVENT_MOUSE_MOTION) {
