@@ -7,48 +7,39 @@
 
 GLuint LoadTexture(const char* file)
 {
-    SDL_Surface* surface = IMG_Load(file);
-
-    if (!surface) {
-        std::cout << "Failed to load image: " << SDL_GetError() << std::endl;
+    SDL_Surface* raw = IMG_Load(file);
+    if (!raw) {
+        std::cout << "Failed to load " << file << ": " << SDL_GetError() << std::endl;
         return 0;
     }
+
+    // Convert to RGBA32 → OpenGL expects this byte order reliably
+    SDL_Surface* surface = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(raw);
+    if (!surface) {
+        std::cout << "Conversion failed for " << file << ": " << SDL_GetError() << std::endl;
+        return 0;
+    }
+
+    // Optional: print to confirm
+    std::cout << "Loaded " << file << " → format: " << SDL_GetPixelFormatName(surface->format)
+              << " (" << surface->w << "x" << surface->h << ")" << std::endl;
 
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
 
-    GLint format;
-
-switch (surface->format) {
-    case SDL_PIXELFORMAT_RGBA32:
-        format = GL_RGBA;
-        break;
-    case SDL_PIXELFORMAT_BGRA32:
-        format = GL_BGRA;
-        break;
-    case SDL_PIXELFORMAT_RGB24:
-        format = GL_RGB;
-        break;
-    case SDL_PIXELFORMAT_BGR24:
-        format = GL_BGR;
-        break;
-    default:
-        format = GL_RGBA;
-        break;
-}
-
-glTexImage2D(
-    GL_TEXTURE_2D,
-    0,
-    GL_RGBA,
-    surface->w,
-    surface->h,
-    0,
-    format,
-    GL_UNSIGNED_BYTE,
-    surface->pixels
-);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,                // internal format
+        surface->w,
+        surface->h,
+        0,
+        GL_RGBA,                // data format — matches RGBA32 bytes
+        GL_UNSIGNED_BYTE,
+        surface->pixels
+    );
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -165,7 +156,7 @@ int main(int argc,char* argv[])
     float pitch=0;
 
     float speed=10.0f;
-    float damper = 0.8f;
+    float damper = 0.4f;
 
     Uint64 NOW = SDL_GetPerformanceCounter();
     Uint64 LAST = 0;
@@ -193,19 +184,26 @@ int main(int argc,char* argv[])
             if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 yaw -= event.motion.xrel * damper;
                 pitch -= event.motion.yrel * damper;
+                if (pitch > 89.0f)  pitch = 89.0f;
+                if (pitch < -89.0f) pitch = -89.0f;
             }
         }
 
         const bool* state = SDL_GetKeyboardState(NULL);
-if (state[SDL_SCANCODE_W]) {
-    playerX -= sin(yaw * M_PI / 180.0) * speed * deltaTime;
-    playerZ -= cos(yaw * M_PI / 180.0) * speed * deltaTime;   // ← changed - to +
-}
-
-if (state[SDL_SCANCODE_S]) {
-    playerX += sin(yaw * M_PI / 180.0) * speed * deltaTime;
-    playerZ += cos(yaw * M_PI / 180.0) * speed * deltaTime;   // ← changed + to -
-}
+        if (state[SDL_SCANCODE_W]) {
+            playerX -= sin(yaw * M_PI / 180.0) * speed * deltaTime;
+            playerZ -= cos(yaw * M_PI / 180.0) * speed * deltaTime;   // ← changed - to +
+        }
+        if (state[SDL_SCANCODE_SPACE]){
+            playerY += speed*deltaTime;
+        }
+        if (state[SDL_SCANCODE_LSHIFT]){
+            playerY -= speed*deltaTime;
+        }
+        if (state[SDL_SCANCODE_S]) {
+            playerX += sin(yaw * M_PI / 180.0) * speed * deltaTime;
+            playerZ += cos(yaw * M_PI / 180.0) * speed * deltaTime;   // ← changed + to -
+        }
         if (state[SDL_SCANCODE_A]) {
             playerX-=cos(yaw*M_PI/180)*speed*deltaTime;
             playerZ-=sin(yaw*M_PI/180)*speed*deltaTime;
