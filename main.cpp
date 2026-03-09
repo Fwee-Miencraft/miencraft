@@ -1,238 +1,328 @@
 #include <iostream>
 #include <cmath>
-
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_opengl.h>
-#include <SDL3_image/SDL_image.h>
-#include <list>
+#include <vector>
 #include <unordered_map>
+#include <string>
 #include <sstream>
 #include <tuple>
 
-float playerX=0;
-float playerY=0;
-float playerZ=3;
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 
-float yaw=0;
-float pitch=0;
+// GLAD – must be included before any OpenGL calls
+#include "glad/glad.h"
+
+// GLM for matrices and vectors
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 using namespace std;
 
-list<tuple<string, string, string>> TextureAtlas = {
-    tuple<string, string, string>("grass_top.png", "grass.png", "dirt.png"),
-    tuple<string, string, string>("dirt.png","dirt.png","dirt.png"),
-    tuple<string, string, string>("stone.png","stone.png","stone.png"),
-    tuple<string, string, string>("error.png","error.png","error.png")
+// ─── Globals ────────────────────────────────────────────────────────────────
+
+float playerX = 0.0f;
+float playerY = 10.0f;
+float playerZ = 5.0f;
+
+float yaw   = -90.0f;   // starts looking along -Z
+float pitch = 0.0f;
+
+float speed = 10.0f;
+float mouseSensitivity = 0.15f;
+
+// Physics
+float gravity = -20.0f;      // m/s² — tweak this
+float jumpVelocity = 8.0f;   // initial upward speed when jumping
+float verticalVelocity = 0.0f; // current falling/jumping speed
+
+bool isOnGround = false;     // we'll update this every frame
+
+unordered_map<string, string> worldBlocks;
+unordered_map<string, GLuint> Textures;
+
+vector<tuple<string, string, string>> TextureAtlas = {
+    {"grass_top.png", "grass.png",     "dirt.png"},
+    {"dirt.png",      "dirt.png",      "dirt.png"},
+    {"stone.png",     "stone.png",     "stone.png"},
+    {"error.png",     "error.png",     "error.png"}
 };
-unordered_map<std::string, int> KeyMapper = {
+
+unordered_map<string, int> KeyMapper = {
     {"error", 0},
-    {"grass" , 1},
-    {"dirt", 2},
+    {"grass", 1},
+    {"dirt",  2},
     {"stone", 3}
 };
-unordered_map<string, GLuint> Textures = {};
 
-std::unordered_map<std::string, std::string> worldBlocks;
+// ─── Helper Functions ───────────────────────────────────────────────────────
 
-// Helper to make key
-std::string posKey(int x, int y, int z) {
-    return std::to_string(x) + "_" + std::to_string(y) + "_" + std::to_string(z);
+string posKey(int x, int y, int z) {
+    return to_string(x) + "_" + to_string(y) + "_" + to_string(z);
 }
 
 bool isSolid(int x, int y, int z) {
-    std::string key = posKey(x, y, z);
-    auto it = worldBlocks.find(key);
-    if (it == worldBlocks.end()) return false;           // air = not solid
-    std::string type = it->second;
-    // Add "air" or transparent types later; for now assume everything is solid
-    return type != "air";  // or check against a set of transparent types
+    auto it = worldBlocks.find(posKey(x, y, z));
+    return (it != worldBlocks.end()) && (it->second != "air");
 }
 
-GLuint LoadTexture(const char* file)
-{
-    string basepath = SDL_GetBasePath();
-    string fullpath = basepath + "Assets/" +file;
+// Returns true if a block was hit, and fills out hitPos with the block coordinates
+bool raycastBreak(float maxDistance, int& hitX, int& hitY, int& hitZ) {
+    // Camera position
+    glm::vec3 pos(playerX, playerY, playerZ);
+
+    // Look direction (same as in your view matrix)
+    float radYaw   = glm::radians(yaw);
+    float radPitch = glm::radians(pitch);
+    glm::vec3 dir(
+        cos(radYaw) * cos(radPitch),
+        sin(radPitch),
+        sin(radYaw) * cos(radPitch)
+    );
+    dir = glm::normalize(dir);
+
+    // Step along the ray in small increments
+    float dist = 0.0f;
+    const float step = 0.05f;  // smaller = more accurate, but slower
+
+    while (dist < maxDistance) {
+        glm::vec3 current = pos + dir * dist;
+
+        hitX = static_cast<int>(floor(current.x));
+        hitY = static_cast<int>(floor(current.y));
+        hitZ = static_cast<int>(floor(current.z));
+
+        if (isSolid(hitX, hitY, hitZ)) {
+            return true;  // found a block!
+        }
+
+        dist += step;
+    }
+
+    return false;  // no block hit within range
+}
+
+tuple<int,int,int> ParseCoords(const string& str) {
+    stringstream ss(str);
+    string token;
+    int x,y,z;
+    getline(ss, token, '_'); x = stoi(token);
+    getline(ss, token, '_'); y = stoi(token);
+    getline(ss, token, '_'); z = stoi(token);
+    return {x, y, z};
+}
+
+tuple<string,string,string> Find_tuple(const string& name) {
+    auto it = KeyMapper.find(name);
+    if (it == KeyMapper.end()) {
+        cout << "Unknown block: " << name << endl;
+        return {"error.png", "error.png", "error.png"};
+    }
+
+    int idx = 0;
+    for (const auto& tup : TextureAtlas) {
+        if (idx == it->second) return tup;
+        idx++;
+    }
+    return {"error.png", "error.png", "error.png"};
+}
+
+// ─── Texture Loading ────────────────────────────────────────────────────────
+
+GLuint LoadTexture(const string& filename) {
+    string fullpath = string(SDL_GetBasePath()) + "Assets/" + filename;
     SDL_Surface* raw = IMG_Load(fullpath.c_str());
     if (!raw) {
-        std::cout << "Failed to load " << file << ": " << SDL_GetError() << std::endl;
-        raw = IMG_Load("error.png");
+        cout << "Failed to load " << filename << ": " << SDL_GetError() << endl;
+        raw = IMG_Load((string(SDL_GetBasePath()) + "Assets/error.png").c_str());
     }
 
-    // Convert to RGBA32 → OpenGL expects this byte order reliably
-    SDL_Surface* surface = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(raw);
-    if (!surface) {
-        std::cout << "Conversion failed for " << file << ": " << SDL_GetError() << std::endl;
-        return 0;
-    }
 
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    glTexImage2D(
-        GL_TEXTURE_2D,
-        0,
-        GL_RGBA,                // internal format
-        surface->w,
-        surface->h,
-        0,
-        GL_RGBA,                // data format — matches RGBA32 bytes
-        GL_UNSIGNED_BYTE,
-        surface->pixels
-    );
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, converted->w, converted->h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    SDL_DestroySurface(surface);
-
-    return texture;
+    SDL_DestroySurface(converted);
+    return tex;
 }
 
-void InitOpenGL(int width, int height)
-{
-    glViewport(0, 0, width, height);
+// ─── Shader ─────────────────────────────────────────────────────────────────
 
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
+GLuint shaderProgram;
 
-    float aspect = (float)width / (float)height;
+void createShader() {
+    const char* vs = R"(
+    #version 330 core
+    layout(location = 0) in vec3 aPos;
+    layout(location = 1) in vec2 aTex;
+    uniform mat4 uMVP;
+    out vec2 TexCoord;
+    void main() {
+        gl_Position = uMVP * vec4(aPos, 1.0);
+        TexCoord = aTex;
+    }
+    )";
 
-    float fov_y_tan_half = tan(10.0f * M_PI / 360.0f);
-    float top    = fov_y_tan_half;
-    float bottom = -fov_y_tan_half;
-    float right  = top * aspect;
-    float left   = -right;
+    const char* fs = R"(
+    #version 330 core
+    in vec2 TexCoord;
+    out vec4 FragColor;
+    uniform sampler2D uTexture;
+    void main() {
+        FragColor = texture(uTexture, TexCoord);
+    }
+    )";
 
-    glFrustum(left, right, bottom, top, 0.1f, 200.0f);
+    GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vshader, 1, &vs, nullptr);
+    glCompileShader(vshader);
 
-    glMatrixMode(GL_MODELVIEW);
+    GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fshader, 1, &fs, nullptr);
+    glCompileShader(fshader);
 
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_TEXTURE_2D);
+    shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vshader);
+    glAttachShader(shaderProgram, fshader);
+    glLinkProgram(shaderProgram);
+
+    glDeleteShader(vshader);
+    glDeleteShader(fshader);
 }
 
-void DrawCube(GLuint topTex, GLuint sideTex, GLuint bottomTex,
-              int worldX, int worldY, int worldZ)
-{
-    // Sides
-    glBindTexture(GL_TEXTURE_2D, sideTex);
-    glBegin(GL_QUADS);
+// ─── Chunk & Mesh ───────────────────────────────────────────────────────────
 
-    // Front (+Z face)
-    if (!isSolid(worldX, worldY, worldZ + 1)) {
-        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f, 0.5f);
-        glTexCoord2f(1,1); glVertex3f( 0.5f,-0.5f, 0.5f);
-        glTexCoord2f(1,0); glVertex3f( 0.5f, 0.5f, 0.5f);
-        glTexCoord2f(0,0); glVertex3f(-0.5f, 0.5f, 0.5f);
-    }
+struct Vertex { float x,y,z, u,v; };
 
-    // Back (-Z face)
-    if (!isSolid(worldX, worldY, worldZ - 1)) {
-        glTexCoord2f(0,1); glVertex3f( 0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,1); glVertex3f(-0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,0); glVertex3f(-0.5f, 0.5f,-0.5f);
-        glTexCoord2f(0,0); glVertex3f( 0.5f, 0.5f,-0.5f);
-    }
+struct Chunk {
+    int cx, cz;
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLsizei count = 0;
+    bool dirty = true;
+};
 
-    // Left (-X)
-    if (!isSolid(worldX - 1, worldY, worldZ)) {
-        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,1); glVertex3f(-0.5f,-0.5f, 0.5f);
-        glTexCoord2f(1,0); glVertex3f(-0.5f, 0.5f, 0.5f);
-        glTexCoord2f(0,0); glVertex3f(-0.5f, 0.5f,-0.5f);
-    }
+unordered_map<string, Chunk> chunks;
 
-    // Right (+X)
-    if (!isSolid(worldX + 1, worldY, worldZ)) {
-        glTexCoord2f(0,1); glVertex3f(0.5f,-0.5f, 0.5f);
-        glTexCoord2f(1,1); glVertex3f(0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,0); glVertex3f(0.5f, 0.5f,-0.5f);
-        glTexCoord2f(0,0); glVertex3f(0.5f, 0.5f, 0.5f);
-    }
-
-    glEnd();
-
-    // Top (+Y)
-    glBindTexture(GL_TEXTURE_2D, topTex);
-    glBegin(GL_QUADS);
-    if (!isSolid(worldX, worldY + 1, worldZ)) {
-        glTexCoord2f(0,1); glVertex3f(-0.5f,0.5f, 0.5f);
-        glTexCoord2f(1,1); glVertex3f( 0.5f,0.5f, 0.5f);
-        glTexCoord2f(1,0); glVertex3f( 0.5f,0.5f,-0.5f);
-        glTexCoord2f(0,0); glVertex3f(-0.5f,0.5f,-0.5f);
-    }
-    glEnd();
-
-    // Bottom (-Y)
-    glBindTexture(GL_TEXTURE_2D, bottomTex);
-    glBegin(GL_QUADS);
-    if (!isSolid(worldX, worldY - 1, worldZ)) {
-        glTexCoord2f(0,1); glVertex3f(-0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,1); glVertex3f( 0.5f,-0.5f,-0.5f);
-        glTexCoord2f(1,0); glVertex3f( 0.5f,-0.5f, 0.5f);
-        glTexCoord2f(0,0); glVertex3f(-0.5f,-0.5f, 0.5f);
-    }
-    glEnd();
-
-    glPopMatrix();  // assuming push was done before
+string chunkKey(int cx, int cz) {
+    return to_string(cx) + "_" + to_string(cz);
 }
 
-std::tuple<string, string, string> Find_tuple(string Index_name) {
-    auto it = KeyMapper.find(Index_name);
-    if (it == KeyMapper.end()) {
-        std::cout << "Unknown block type: " << Index_name << std::endl;
-        return {"error.png", "error.png", "error.png"};  // fallback
-    }
-    int target = it->second;
+void buildChunkMesh(Chunk& chunk) {
+    if (chunk.vao) glDeleteVertexArrays(1, &chunk.vao);
+    if (chunk.vbo) glDeleteBuffers(1, &chunk.vbo);
+    chunk.vao = chunk.vbo = 0;
+    chunk.count = 0;
 
-    int idx = 1;
-    for (const auto& tup : TextureAtlas) {
-        if (idx == target) {
-            return tup;
+    vector<Vertex> vertices;
+
+    for (int lx = 0; lx < 16; ++lx) {
+        for (int ly = -10; ly <= 5; ++ly) {
+            for (int lz = 0; lz < 16; ++lz) {
+                int wx = chunk.cx * 16 + lx;
+                int wy = ly;
+                int wz = chunk.cz * 16 + lz;
+
+                string key = posKey(wx, wy, wz);
+                if (worldBlocks.find(key) == worldBlocks.end()) continue;
+
+                string type = worldBlocks[key];
+                auto [topF, sideF, botF] = Find_tuple(type);
+
+                // Front (+Z)
+                if (!isSolid(wx, wy, wz + 1)) {
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,0});
+                }
+
+                // Back (-Z)
+                if (!isSolid(wx, wy, wz - 1)) {
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 0,0});
+                }
+
+                // Left (-X)
+                if (!isSolid(wx - 1, wy, wz)) {
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 1,1});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
+                }
+
+                // Right (+X)
+                if (!isSolid(wx + 1, wy, wz)) {
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 0,0});
+                }
+
+                // Top (+Y)
+                if (!isSolid(wx, wy + 1, wz)) {
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
+                }
+
+                // Bottom (-Y)
+                if (!isSolid(wx, wy - 1, wz)) {
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
+                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,0});
+                }
+            }
         }
-        idx++;
     }
 
-    std::cout << "Index not found for " << Index_name << " (value=" << target << ")" << std::endl;
-    return {"error.png", "error.png", "error.png"};  // safe fallback
+    if (vertices.empty()) {
+        chunk.dirty = false;
+        return;
+    }
+
+    glGenVertexArrays(1, &chunk.vao);
+    glGenBuffers(1, &chunk.vbo);
+
+    glBindVertexArray(chunk.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(3*sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    chunk.count = vertices.size();
+    chunk.dirty = false;
 }
 
-void RenderCube(float wx, float wy, float wz, std::string type) {
-    auto tup = Find_tuple(type);
-    string top    = std::get<0>(tup);
-    string side   = std::get<1>(tup);
-    string bottom = std::get<2>(tup);
-
-    GLuint t = Textures[top];
-    GLuint s = Textures[side];
-    GLuint b = Textures[bottom];
-
-    glPushMatrix();
-    glTranslatef(static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(wz));
-    DrawCube(t, s, b, wx, wy, wz);   // now passes world pos
-    glPopMatrix();
-}
-
-std::tuple<int,int,int> ParseCoords(const std::string& str)
-{
-    stringstream ss(str);
-    string part;
-
-    int x, y, z;
-
-    getline(ss, part, '_');
-    x = stoi(part);
-
-    getline(ss, part, '_');
-    y = stoi(part);
-
-    getline(ss, part, '_');
-    z = stoi(part);
-
-    return make_tuple(x, y, z);
-}
+// ─── Chunk Generation ──────────────────────────────────────────────────────
 
 void AddBlock(int x, int y, int z, string type) {
     worldBlocks[posKey(x, y, z)] = type;
@@ -243,7 +333,7 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
         for (int dy = 0; dy < height; ++dy) {
             for (int dx = 0; dx < width; ++dx) {
                 int x = startX + dx;
-                int y = startY - dy;
+                int y = startY + dy;   // ← note: removed -dy, use +dy for normal up direction
                 int z = startZ + dz;
                 AddBlock(x, y, z, type);
             }
@@ -251,164 +341,189 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
-void GenerateChunk(int x, int z){
-    AddLotsOfBlocks(x * 16  , 0, z * 16  , 16, 1,  16, "grass");
-    AddLotsOfBlocks(x * 16  , -1, z * 16  ,  16, 3,  16, "dirt");
-    AddLotsOfBlocks(x * 16  , -4, z * 16  ,  16, 5,  16, "stone");
-}
+void GenerateChunk(int cx, int cz) {
+    string ckey = chunkKey(cx, cz);
+    if (chunks.count(ckey)) return;
 
-bool TryAdjacentChunk(int x, int z){
-    std::string key = posKey(x, 0, z);
-    return worldBlocks.find(key) != worldBlocks.end();
+    Chunk ch;
+    ch.cx = cx;
+    ch.cz = cz;
+    ch.dirty = true;
+    chunks[ckey] = ch;
+
+    AddLotsOfBlocks(cx*16,  0, cz*16, 16, 1, 16, "grass");
+    AddLotsOfBlocks(cx*16, -1, cz*16, 16, 3, 16, "dirt");
+    AddLotsOfBlocks(cx*16, -4, cz*16, 16, 5, 16, "stone");
 }
 
 void GenerateUnloadedChunks() {
-    // Use floor division — correct for negative coords too
-    int px = static_cast<int>(std::floor(playerX / 16.0f));
-    int pz = static_cast<int>(std::floor(playerZ / 16.0f));
+    int px = floor(playerX / 16.0f);
+    int pz = floor(playerZ / 16.0f);
 
-    // Small view distance — generate chunks in 5×5 area around player (adjust as needed)
-    const int VIEW_CHUNKS = 1;   // 5×5 = -2..+2 around player chunk
-
-    for (int dx = -VIEW_CHUNKS; dx <= VIEW_CHUNKS; ++dx) {
-        for (int dz = -VIEW_CHUNKS; dz <= VIEW_CHUNKS; ++dz) {
-            int cx = px + dx;
-            int cz = pz + dz;
-
-            // Simple check: see if bottom layer of this chunk has any block
-            // (you can improve this later with a set of generated chunks)
-            bool chunkExists = false;
-            for (int lx = 0; lx < 16 && !chunkExists; ++lx) {
-                for (int lz = 0; lz < 16 && !chunkExists; ++lz) {
-                    int wx = cx * 16 + lx;
-                    int wz = cz * 16 + lz;
-                    if (worldBlocks.find(posKey(wx, -4, wz)) != worldBlocks.end()) {
-                        chunkExists = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!chunkExists) {
-                GenerateChunk(cx, cz);
-                std::cout << "Generated chunk at (" << cx << ", " << cz << ")\n";
-            }
+    for (int dx = -2; dx <= 2; ++dx) {
+        for (int dz = -2; dz <= 2; ++dz) {
+            GenerateChunk(px + dx, pz + dz);
         }
     }
 }
 
-int main(int argc,char* argv[])
-{
-    SDL_Init(SDL_INIT_VIDEO);
+// ─── Main ──────────────────────────────────────────────────────────────────
 
-    SDL_Window* window = SDL_CreateWindow(
-        "Minecraft",
-        1280,
-        720,
-        SDL_WINDOW_OPENGL
-    );
+int main(int argc, char* argv[]) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        cout << "SDL init failed: " << SDL_GetError() << endl;
+        return 1;
+    }
 
-    SDL_SetWindowRelativeMouseMode(window, true);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 
-    SDL_GLContext context = SDL_GL_CreateContext(window);
+    SDL_Window* window = SDL_CreateWindow("Voxel Test - Modern GL", 1280, 720, SDL_WINDOW_OPENGL);
+    if (!window) {
+        cout << "Window creation failed: " << SDL_GetError() << endl;
+        SDL_Quit();
+        return 1;
+    }
 
-    InitOpenGL(1280,720);
+    SDL_GL_CreateContext(window);
 
-    Textures["grass_top.png"]   = LoadTexture("grass_top.png");
-    Textures["grass.png"]       = LoadTexture("grass.png");
-    Textures["dirt.png"]        = LoadTexture("dirt.png");
-    Textures["stone.png"]       = LoadTexture("stone.png");
-    Textures["error.png"]       = LoadTexture("error.png");
+    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        cout << "GLAD failed\n";
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
 
-    GLuint grassTop = LoadTexture("grass_top.png");
-    GLuint grassSide = LoadTexture("grass.png");
-    GLuint dirt = LoadTexture("dirt.png");
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
 
-    GenerateChunk(0,0);
+    // Load textures
+    Textures["grass_top.png"] = LoadTexture("grass_top.png");
+    Textures["grass.png"]     = LoadTexture("grass.png");
+    Textures["dirt.png"]      = LoadTexture("dirt.png");
+    Textures["stone.png"]     = LoadTexture("stone.png");
+    Textures["error.png"]     = LoadTexture("error.png");
 
-    playerX=0;
-    playerY=0;
-    playerZ=0;
+    createShader();
+    glUseProgram(shaderProgram);
 
-    yaw=0;
-    pitch=0;
+    GenerateChunk(0, 0);
 
-    float speed= 2.5f;
-    float damper = 0.4f;
+    bool running = true;
+    SDL_Event e;
 
-    Uint64 NOW = SDL_GetPerformanceCounter();
-    Uint64 LAST = 0;
-    double deltaTime = 0; // Stored in seconds
+    Uint64 lastTime = SDL_GetPerformanceCounter();
 
-    bool running=true;
-    SDL_Event event;
+    while (running) {
+        Uint64 now = SDL_GetPerformanceCounter();
+        double dt = (double)(now - lastTime) / SDL_GetPerformanceFrequency();
+        lastTime = now;
 
-    while(running)
-    {
-        LAST = NOW;
-        NOW = SDL_GetPerformanceCounter();
-        deltaTime = (double)((NOW - LAST) / (double)SDL_GetPerformanceFrequency());
-        while(SDL_PollEvent(&event))
-        {
-            if(event.type==SDL_EVENT_QUIT)
-                running=false;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) {
+                running = false;
+            }
 
-            if(event.type==SDL_EVENT_KEY_DOWN)
-            {
-                if (event.key.key==SDLK_ESCAPE){
-                    return 0;
+            if (e.type == SDL_EVENT_KEY_DOWN) {
+                if (e.key.key == SDLK_ESCAPE) {
+                    running = false;
                 }
             }
-            if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                yaw -= event.motion.xrel * damper;
-                pitch -= event.motion.yrel * damper;
+
+            // Mouse look (continuous motion)
+            if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                yaw   += e.motion.xrel * mouseSensitivity;
+                pitch -= e.motion.yrel * mouseSensitivity;
+
                 if (pitch > 89.0f)  pitch = 89.0f;
                 if (pitch < -89.0f) pitch = -89.0f;
             }
-        }
 
-        const bool* state = SDL_GetKeyboardState(NULL);
-        float rad = yaw * M_PI / 180.0f;
-        float fx = sin(rad);   // forward X
-        float fz = cos(rad);   // forward Z
-        float rx = cos(rad);   // right X
-        float rz = -sin(rad);  // right Z
+            // Block breaking on left mouse click
+            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    int hx, hy, hz;
+                    if (raycastBreak(6.0f, hx, hy, hz)) {  // 6 blocks reach — feel free to change
+                        string key = posKey(hx, hy, hz);
+                        if (worldBlocks.erase(key)) {  // erase returns >0 if key existed
+                            // Mark nearby chunks dirty to rebuild mesh
+                            int cx = hx / 16;
+                            int cz = hz / 16;
 
-        if (state[SDL_SCANCODE_W]) {
-            playerX -= fx * speed * deltaTime;
-            playerZ -= fz * speed * deltaTime;
+                            for (int dx = -1; dx <= 1; ++dx) {
+                                for (int dz = -1; dz <= 1; ++dz) {
+                                    string ckey = chunkKey(cx + dx, cz + dz);
+                                    auto it = chunks.find(ckey);
+                                    if (it != chunks.end()) {
+                                        it->second.dirty = true;
+                                    }
+                                }
+                            }
+                            cout << "Broke block at (" << hx << ", " << hy << ", " << hz << ")\n";
+                        }
+                    } else {
+                        cout << "No block hit within range\n";
+                    }
+                }
+                cout << "click!" << endl;
+            }
+            cout << "looping.." << endl;
         }
-        if (state[SDL_SCANCODE_S]) {
-            playerX += fx * speed * deltaTime;
-            playerZ += fz * speed * deltaTime;
-        }
-        if (state[SDL_SCANCODE_D]) {
-            playerX += rx * speed * deltaTime;
-            playerZ += rz * speed * deltaTime;
-        }
-        if (state[SDL_SCANCODE_A]) {
-            playerX -= rx * speed * deltaTime;
-            playerZ -= rz * speed * deltaTime;
-        }
-        if (state[SDL_SCANCODE_SPACE]) {
-            playerY += speed * deltaTime;
-        }
-        if (state[SDL_SCANCODE_LSHIFT]) {
-            playerY -= speed * deltaTime;
-        }
+        std::cout << "loopign out" << std::endl;
 
+// Old simple movement (free fly, no gravity/collision)
+const bool* keys = SDL_GetKeyboardState(nullptr);
+
+float rad = glm::radians(yaw);
+glm::vec3 forward(cos(rad), 0.0f, sin(rad));
+forward = glm::normalize(forward);
+glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
+
+glm::vec3 moveDir(0.0f);
+
+if (keys[SDL_SCANCODE_W]) moveDir += forward;
+if (keys[SDL_SCANCODE_S]) moveDir -= forward;
+if (keys[SDL_SCANCODE_A]) moveDir -= right;
+if (keys[SDL_SCANCODE_D]) moveDir += right;
+
+moveDir *= speed * (float)dt;
+
+playerX += moveDir.x;
+playerZ += moveDir.z;
+
+if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
+if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
         GenerateUnloadedChunks();
 
-        glClearColor(0.5f,0.7f,1.0f,1);
-        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-        glLoadIdentity();
-        glRotatef(-pitch,1,0,0);
-        glRotatef(-yaw,0,1,0);
-        glTranslatef(-playerX,-playerY,-playerZ);
+        glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        for (const auto& [coords, block_type] : worldBlocks) {
-            tuple<int , int, int> CoordTuple = ParseCoords(coords);
-            RenderCube(get<0>(CoordTuple), get<1>(CoordTuple), get<2>(CoordTuple), block_type);
+        glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1280.0f / 720.0f, 0.1f, 200.0f);
+
+        glm::vec3 direction(
+            cos(glm::radians(yaw)) * cos(glm::radians(pitch)),
+            sin(glm::radians(pitch)),
+            sin(glm::radians(yaw)) * cos(glm::radians(pitch))
+        );
+
+        glm::mat4 view = glm::lookAt(
+            glm::vec3(playerX, playerY, playerZ),
+            glm::vec3(playerX, playerY, playerZ) + direction,
+            glm::vec3(0,1,0)
+        );
+
+        glm::mat4 mvp = proj * view;
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
+
+        glUseProgram(shaderProgram);
+        for (auto& [_, chunk] : chunks) {
+            if (chunk.dirty) buildChunkMesh(chunk);
+            if (chunk.count == 0) continue;
+
+            glBindTexture(GL_TEXTURE_2D, Textures["grass.png"]);
+            glBindVertexArray(chunk.vao);
+            glDrawArrays(GL_TRIANGLES, 0, chunk.count);
         }
 
         SDL_GL_SwapWindow(window);
@@ -416,6 +531,5 @@ int main(int argc,char* argv[])
 
     SDL_DestroyWindow(window);
     SDL_Quit();
-
     return 0;
 }
