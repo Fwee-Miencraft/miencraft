@@ -338,13 +338,13 @@ void GenerateChunk(int cx, int cz) {
 
 
     // Grass layer at y=0 (top exposed)
-    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers, 16, "grass");
+    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers + 2, 16, "grass");
 
     // Dirt layers below grass (y=-1 to -3)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers, cz*16, 16, dirtlayers + 2, 16, "dirt");
+    AddLotsOfBlocks(cx*16, 0 - grasslayers - 2, cz*16, 16, dirtlayers + 2, 16, "dirt");
 
     // Stone below dirt (y=-4 to -8)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers, cz*16, 16, stonelayers, 16, "stone");
+    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers - 2, cz*16, 16, stonelayers, 16, "stone");
 }
 
 void GenerateUnloadedChunks() {
@@ -407,6 +407,10 @@ void tryBreakInFront() {
 
     cout << "No breakable block in front" << endl;
     breakCooldown = BREAK_COOLDOWN_TIME / 2;
+}
+
+void AddTree(int BaseBlockX, int BaseBlockY, int BaseBlockZ){
+    
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
