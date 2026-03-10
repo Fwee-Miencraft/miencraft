@@ -409,6 +409,10 @@ void tryBreakInFront() {
     breakCooldown = BREAK_COOLDOWN_TIME / 2;
 }
 
+void AddTree(int BaseBlockX, int BaseBlockY, int BaseBlockZ){
+    
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
