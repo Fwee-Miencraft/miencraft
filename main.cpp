@@ -31,12 +31,8 @@ float pitch = 0.0f;
 float speed = 10.0f;
 float mouseSensitivity = 0.15f;
 
-// Physics
-float gravity = -20.0f;      // m/s² — tweak this
-float jumpVelocity = 8.0f;   // initial upward speed when jumping
-float verticalVelocity = 0.0f; // current falling/jumping speed
-
-bool isOnGround = false;     // we'll update this every frame
+float breakCooldown = 0.0f;
+const float BREAK_COOLDOWN_TIME = 0.3f;  // seconds
 
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
@@ -66,42 +62,6 @@ bool isSolid(int x, int y, int z) {
     return (it != worldBlocks.end()) && (it->second != "air");
 }
 
-// Returns true if a block was hit, and fills out hitPos with the block coordinates
-bool raycastBreak(float maxDistance, int& hitX, int& hitY, int& hitZ) {
-    // Camera position
-    glm::vec3 pos(playerX, playerY, playerZ);
-
-    // Look direction (same as in your view matrix)
-    float radYaw   = glm::radians(yaw);
-    float radPitch = glm::radians(pitch);
-    glm::vec3 dir(
-        cos(radYaw) * cos(radPitch),
-        sin(radPitch),
-        sin(radYaw) * cos(radPitch)
-    );
-    dir = glm::normalize(dir);
-
-    // Step along the ray in small increments
-    float dist = 0.0f;
-    const float step = 0.05f;  // smaller = more accurate, but slower
-
-    while (dist < maxDistance) {
-        glm::vec3 current = pos + dir * dist;
-
-        hitX = static_cast<int>(floor(current.x));
-        hitY = static_cast<int>(floor(current.y));
-        hitZ = static_cast<int>(floor(current.z));
-
-        if (isSolid(hitX, hitY, hitZ)) {
-            return true;  // found a block!
-        }
-
-        dist += step;
-    }
-
-    return false;  // no block hit within range
-}
-
 tuple<int,int,int> ParseCoords(const string& str) {
     stringstream ss(str);
     string token;
@@ -119,11 +79,15 @@ tuple<string,string,string> Find_tuple(const string& name) {
         return {"error.png", "error.png", "error.png"};
     }
 
-    int idx = 0;
+    int target = it->second;  // 1=grass, 2=dirt, 3=stone
+
+    int idx = 1;  // ← start at 1 to skip error entry at 0
     for (const auto& tup : TextureAtlas) {
-        if (idx == it->second) return tup;
+        if (idx == target) return tup;
         idx++;
     }
+
+    cout << "Index not found for " << name << " (value=" << target << ")" << endl;
     return {"error.png", "error.png", "error.png"};
 }
 
@@ -152,6 +116,9 @@ GLuint LoadTexture(const string& filename) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     SDL_DestroySurface(converted);
+
+    cout << "Loaded texture '" << filename << "' as ID " << tex << endl;
+
     return tex;
 }
 
@@ -205,12 +172,11 @@ struct Vertex { float x,y,z, u,v; };
 
 struct Chunk {
     int cx, cz;
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLsizei count = 0;
+    std::unordered_map<GLuint, GLuint> vaos;   // textureID → VAO
+    std::unordered_map<GLuint, GLuint> vbos;   // textureID → VBO
+    std::unordered_map<GLuint, GLsizei> counts; // textureID → vertex count
     bool dirty = true;
 };
-
 unordered_map<string, Chunk> chunks;
 
 string chunkKey(int cx, int cz) {
@@ -218,15 +184,17 @@ string chunkKey(int cx, int cz) {
 }
 
 void buildChunkMesh(Chunk& chunk) {
-    if (chunk.vao) glDeleteVertexArrays(1, &chunk.vao);
-    if (chunk.vbo) glDeleteBuffers(1, &chunk.vbo);
-    chunk.vao = chunk.vbo = 0;
-    chunk.count = 0;
+    // Clean up old data
+    for (auto& p : chunk.vaos) glDeleteVertexArrays(1, &p.second);
+    for (auto& p : chunk.vbos) glDeleteBuffers(1, &p.second);
+    chunk.vaos.clear();
+    chunk.vbos.clear();
+    chunk.counts.clear();
 
-    vector<Vertex> vertices;
+    std::unordered_map<GLuint, std::vector<Vertex>> vertexGroups;
 
     for (int lx = 0; lx < 16; ++lx) {
-        for (int ly = -10; ly <= 5; ++ly) {
+        for (int ly = -30; ly <= 30; ++ly)  {
             for (int lz = 0; lz < 16; ++lz) {
                 int wx = chunk.cx * 16 + lx;
                 int wy = ly;
@@ -238,94 +206,107 @@ void buildChunkMesh(Chunk& chunk) {
                 string type = worldBlocks[key];
                 auto [topF, sideF, botF] = Find_tuple(type);
 
-                // Front (+Z)
+                GLuint topTex  = Textures[topF];
+                GLuint sideTex = Textures[sideF];
+                GLuint botTex  = Textures[botF];
+
+                // Front (+Z) - use side texture
                 if (!isSolid(wx, wy, wz + 1)) {
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,0});
                 }
 
-                // Back (-Z)
+                // Back (-Z) - side texture
                 if (!isSolid(wx, wy, wz - 1)) {
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 1,1});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 0,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz-0.5f, 0,0});
                 }
 
-                // Left (-X)
+                // Left (-X) - side texture
                 if (!isSolid(wx - 1, wy, wz)) {
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 1,1});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz+0.5f, 1,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz+0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
                 }
 
-                // Right (+X)
+                // Right (+X) - side texture
                 if (!isSolid(wx + 1, wy, wz)) {
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 0,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 0,1});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[sideTex].push_back({wx+0.5f, wy+0.5f, wz+0.5f, 0,0});
                 }
 
-                // Top (+Y)
+                // Top (+Y) - top texture
                 if (!isSolid(wx, wy + 1, wz)) {
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
+                    vertexGroups[topTex].push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
+                    vertexGroups[topTex].push_back({wx+0.5f, wy+0.5f, wz+0.5f, 1,1});
+                    vertexGroups[topTex].push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[topTex].push_back({wx-0.5f, wy+0.5f, wz+0.5f, 0,1});
+                    vertexGroups[topTex].push_back({wx+0.5f, wy+0.5f, wz-0.5f, 1,0});
+                    vertexGroups[topTex].push_back({wx-0.5f, wy+0.5f, wz-0.5f, 0,0});
                 }
 
-                // Bottom (-Y)
+                // Bottom (-Y) - bottom texture
                 if (!isSolid(wx, wy - 1, wz)) {
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
-                    vertices.push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
-                    vertices.push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,0});
+                    //cout << "Bottom face of " << type << " at (" << wx << "," << wy << "," << wz << ") using texture ID " << botTex << endl;
+                    vertexGroups[botTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[botTex].push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
+                    vertexGroups[botTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
+                    vertexGroups[botTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
+                    vertexGroups[botTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
+                    vertexGroups[botTex].push_back({wx-0.5f, wy-0.5f, wz+0.5f, 0,0});
                 }
             }
         }
     }
 
-    if (vertices.empty()) {
-        chunk.dirty = false;
-        return;
+    // Create one VAO/VBO per texture group
+    for (auto& [texID, verts] : vertexGroups) {
+        if (verts.empty()) continue;
+
+        GLuint vao, vbo;
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), verts.data(), GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(3*sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        chunk.vaos[texID] = vao;
+        chunk.vbos[texID] = vbo;
+        chunk.counts[texID] = verts.size();
     }
 
-    glGenVertexArrays(1, &chunk.vao);
-    glGenBuffers(1, &chunk.vbo);
-
-    glBindVertexArray(chunk.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(3*sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    chunk.count = vertices.size();
     chunk.dirty = false;
 }
 
 // ─── Chunk Generation ──────────────────────────────────────────────────────
 
 void AddBlock(int x, int y, int z, string type) {
-    worldBlocks[posKey(x, y, z)] = type;
+    string key = posKey(x, y, z);
+    worldBlocks[key] = type;
+    if (type == "grass"){
+    cout << "Placed " << type << " at " << key << endl;  // ← add this line
+    }
 }
 
 void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, int width, string type) {
@@ -333,7 +314,7 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
         for (int dy = 0; dy < height; ++dy) {
             for (int dx = 0; dx < width; ++dx) {
                 int x = startX + dx;
-                int y = startY + dy;   // ← note: removed -dy, use +dy for normal up direction
+                int y = startY + dy;
                 int z = startZ + dz;
                 AddBlock(x, y, z, type);
             }
@@ -351,9 +332,19 @@ void GenerateChunk(int cx, int cz) {
     ch.dirty = true;
     chunks[ckey] = ch;
 
-    AddLotsOfBlocks(cx*16,  0, cz*16, 16, 1, 16, "grass");
-    AddLotsOfBlocks(cx*16, -1, cz*16, 16, 3, 16, "dirt");
-    AddLotsOfBlocks(cx*16, -4, cz*16, 16, 5, 16, "stone");
+    int grasslayers = 1;
+    int stonelayers = 5;
+    int dirtlayers = 3;
+
+
+    // Grass layer at y=0 (top exposed)
+    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers, 16, "grass");
+
+    // Dirt layers below grass (y=-1 to -3)
+    AddLotsOfBlocks(cx*16, 0 - grasslayers, cz*16, 16, dirtlayers + 2, 16, "dirt");
+
+    // Stone below dirt (y=-4 to -8)
+    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers, cz*16, 16, stonelayers, 16, "stone");
 }
 
 void GenerateUnloadedChunks() {
@@ -365,6 +356,57 @@ void GenerateUnloadedChunks() {
             GenerateChunk(px + dx, pz + dz);
         }
     }
+}
+
+void tryBreakInFront() {
+    if (breakCooldown > 0.0f) {
+        cout << "Break on cooldown (" << breakCooldown << "s left)" << endl;
+        return;
+    }
+
+    cout << "Trying to break block in front" << endl;
+
+    // Look direction
+    float radYaw   = glm::radians(yaw);
+    float radPitch = glm::radians(pitch);
+    glm::vec3 dir(
+        cos(radYaw) * cos(radPitch),
+        sin(radPitch),
+        sin(radYaw) * cos(radPitch)
+    );
+    dir = glm::normalize(dir);
+
+    glm::vec3 start(playerX, playerY, playerZ);
+
+    for (int step = 1; step <= 5; ++step) {
+        glm::vec3 pos = start + dir * (float)step;
+
+        int bx = floor(pos.x);
+        int by = floor(pos.y);
+        int bz = floor(pos.z);
+
+        string key = posKey(bx, by, bz);
+        if (worldBlocks.erase(key)) {
+            cout << "Broke block at (" << bx << ", " << by << ", " << bz << ")" << endl;
+
+            int cx = bx / 16;
+            int cz = bz / 16;
+            for (int dx = -1; dx <= 1; ++dx) {
+                for (int dz = -1; dz <= 1; ++dz) {
+                    string ckey = chunkKey(cx + dx, cz + dz);
+                    auto it = chunks.find(ckey);
+                    if (it != chunks.end()) {
+                        it->second.dirty = true;
+                    }
+                }
+            }
+            breakCooldown = BREAK_COOLDOWN_TIME;
+            return;
+        }
+    }
+
+    cout << "No breakable block in front" << endl;
+    breakCooldown = BREAK_COOLDOWN_TIME / 2;
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
@@ -381,7 +423,7 @@ int main(int argc, char* argv[]) {
 
     SDL_Window* window = SDL_CreateWindow("Voxel Test - Modern GL", 1280, 720, SDL_WINDOW_OPENGL);
     if (!window) {
-        cout << "Window creation failed: " << SDL_GetError() << endl;
+        cout << "Window failed: " << SDL_GetError() << endl;
         SDL_Quit();
         return 1;
     }
@@ -394,6 +436,11 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
+
+    // Mouse setup - critical for macOS
+    SDL_SetWindowRelativeMouseMode(window, true);
+    SDL_HideCursor();
+    SDL_RaiseWindow(window);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -420,80 +467,75 @@ int main(int argc, char* argv[]) {
         double dt = (double)(now - lastTime) / SDL_GetPerformanceFrequency();
         lastTime = now;
 
+        breakCooldown -= (float)dt;
+        if (breakCooldown < 0.0f) breakCooldown = 0.0f;
+
+        // Event loop
         while (SDL_PollEvent(&e)) {
+
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
             }
 
             if (e.type == SDL_EVENT_KEY_DOWN) {
-                if (e.key.key == SDLK_ESCAPE) {
-                    running = false;
+                cout << "[KEY] " << e.key.key << endl;
+                if (e.key.key == SDLK_ESCAPE) running = false;
+
+                // Break on E
+                if (e.key.key == SDLK_E) {
+                    cout << "E pressed - trying to break" << endl;
+                    tryBreakInFront();
                 }
             }
 
-            // Mouse look (continuous motion)
             if (e.type == SDL_EVENT_MOUSE_MOTION) {
                 yaw   += e.motion.xrel * mouseSensitivity;
                 pitch -= e.motion.yrel * mouseSensitivity;
-
-                if (pitch > 89.0f)  pitch = 89.0f;
+                if (pitch > 89.0f) pitch = 89.0f;
                 if (pitch < -89.0f) pitch = -89.0f;
             }
 
-            // Block breaking on left mouse click
             if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                cout << "[MOUSE DOWN] Button: " << (int)e.button.button << endl;
                 if (e.button.button == SDL_BUTTON_LEFT) {
-                    int hx, hy, hz;
-                    if (raycastBreak(6.0f, hx, hy, hz)) {  // 6 blocks reach — feel free to change
-                        string key = posKey(hx, hy, hz);
-                        if (worldBlocks.erase(key)) {  // erase returns >0 if key existed
-                            // Mark nearby chunks dirty to rebuild mesh
-                            int cx = hx / 16;
-                            int cz = hz / 16;
-
-                            for (int dx = -1; dx <= 1; ++dx) {
-                                for (int dz = -1; dz <= 1; ++dz) {
-                                    string ckey = chunkKey(cx + dx, cz + dz);
-                                    auto it = chunks.find(ckey);
-                                    if (it != chunks.end()) {
-                                        it->second.dirty = true;
-                                    }
-                                }
-                            }
-                            cout << "Broke block at (" << hx << ", " << hy << ", " << hz << ")\n";
-                        }
-                    } else {
-                        cout << "No block hit within range\n";
-                    }
+                    cout << "Left click - trying to break" << endl;
+                    tryBreakInFront();
                 }
-                cout << "click!" << endl;
             }
-            cout << "looping.." << endl;
         }
-        std::cout << "loopign out" << std::endl;
 
-// Old simple movement (free fly, no gravity/collision)
-const bool* keys = SDL_GetKeyboardState(nullptr);
+        // Poll mouse button state every frame (backup for event drop)
+        float mx, my;
+        Uint32 mouseState = SDL_GetMouseState(&mx, &my);
 
-float rad = glm::radians(yaw);
-glm::vec3 forward(cos(rad), 0.0f, sin(rad));
-forward = glm::normalize(forward);
-glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
+        if ((mouseState & SDL_BUTTON_LMASK) && breakCooldown <= 0.0f) {
+            cout << "Mouse held - breaking" << endl;
+            tryBreakInFront();
+        }
 
-glm::vec3 moveDir(0.0f);
+        // Old free-fly movement
+        const bool* keys = SDL_GetKeyboardState(nullptr);
 
-if (keys[SDL_SCANCODE_W]) moveDir += forward;
-if (keys[SDL_SCANCODE_S]) moveDir -= forward;
-if (keys[SDL_SCANCODE_A]) moveDir -= right;
-if (keys[SDL_SCANCODE_D]) moveDir += right;
+        float rad = glm::radians(yaw);
+        glm::vec3 forward(cos(rad), 0.0f, sin(rad));
+        forward = glm::normalize(forward);
+        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
 
-moveDir *= speed * (float)dt;
+        glm::vec3 moveDir(0.0f);
 
-playerX += moveDir.x;
-playerZ += moveDir.z;
+        if (keys[SDL_SCANCODE_W]) moveDir += forward;
+        if (keys[SDL_SCANCODE_S]) moveDir -= forward;
+        if (keys[SDL_SCANCODE_A]) moveDir -= right;
+        if (keys[SDL_SCANCODE_D]) moveDir += right;
 
-if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
-if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
+        moveDir *= speed * (float)dt;
+
+        playerX += moveDir.x;
+        playerZ += moveDir.z;
+
+        if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
+        if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
+
         GenerateUnloadedChunks();
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
@@ -517,14 +559,19 @@ if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
         glUseProgram(shaderProgram);
-        for (auto& [_, chunk] : chunks) {
-            if (chunk.dirty) buildChunkMesh(chunk);
-            if (chunk.count == 0) continue;
+for (auto& [ckey, chunk] : chunks) {
+    if (chunk.dirty) buildChunkMesh(chunk);
 
-            glBindTexture(GL_TEXTURE_2D, Textures["grass.png"]);
-            glBindVertexArray(chunk.vao);
-            glDrawArrays(GL_TRIANGLES, 0, chunk.count);
-        }
+    if (chunk.counts.empty()) continue;
+
+    //ing chunk " << ckey << " with " << chunk.vaos.size() << " texture groups" << endl;
+
+    for (const auto& [texID, vao] : chunk.vaos) {
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
+    }
+}
 
         SDL_GL_SwapWindow(window);
     }
