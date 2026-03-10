@@ -1,0 +1,24 @@
+name: Discord Notification
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  discord-notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Message to Discord
+        uses: appleboy/discord-action@v1
+        with:
+          webhook_id: ${{ secrets.DISCORD_ID }}
+          webhook_token: ${{ secrets.DISCORD_TOKEN }}
+          message: |
+            **New Activity in ${{ github.repository }}**
+
+            Event: ${{ github.event_name }}
+            User: ${{ github.actor }}
+
+            Repo: https://github.com/${{ github.repository }}
+
