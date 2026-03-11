@@ -5,6 +5,8 @@
 #include <string>
 #include <sstream>
 #include <tuple>
+#include <random>
+#include <cstdint>
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -54,6 +56,8 @@ unordered_map<string, int> KeyMapper = {
     {"wood", 4},
     {"leaves", 5}
 };
+
+std::mt19937 rng;
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
@@ -305,18 +309,38 @@ void buildChunkMesh(Chunk& chunk) {
 
 // ─── Chunk Generation ──────────────────────────────────────────────────────
 
-void AddBlock(int x, int y, int z, string type, bool Overwrite) {
+void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
     string key = posKey(x, y, z);
-    if (!(isSolid(x,y, z) && !Overwrite)){
+    if (Overwrite || worldBlocks.count(key) == 0) {
         worldBlocks[key] = type;
-        if (type == "wood"){
-            //cout << "Placed " << type << " at " << key << endl;  // ← add this line
+
+        // Mark current chunk + neighbors in a 3×3 area (or even 5×5 if needed)
+        int cx = x / 16;
+        int cz = z / 16;
+
+        if (SDL_rand(2) == 1){
+
+        // Bigger radius for leaves (they spread 2–3 blocks out)
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dz = -1; dz <= 1; ++dz) {
+                string nkey = chunkKey(cx + dx, cz + dz);
+                auto it = chunks.find(nkey);
+                if (it != chunks.end()) {
+                    it->second.dirty = true;
+                }
+            }
         }
+
+        if (type == "leaves") {
+            //cout << "Leaf placed at border? Marked neighbors dirty" << endl;
+        }
+    }
     }
 }
 
 void GenerateTreeBaseAt(int x, int y, int z){
     int height = SDL_rand(2) + 1;
+    AddBlock(x, y + height - 2, z, "wood", false);
     AddBlock(x, y + height - 1, z, "wood", false);
     AddBlock(x, y + height, z, "wood", true);
     AddBlock(x, y + height + 1, z, "wood", true);
@@ -359,8 +383,8 @@ void GenerateTreeBaseAt(int x, int y, int z){
     AddBlock(x + 2, y + height + 1, z - 1, "leaves", true);
     AddBlock(x - 2, y + height + 1, z - 1, "leaves", true);
     AddBlock(x - 2, y + height + 1, z + 1, "leaves", true);
-    AddBlock(x, height + 1, z - 2, "leaves", true);
-    AddBlock(x, height + 1, z + 2, "leaves", true);
+    AddBlock(x, y + height + 1, z - 2, "leaves", true);
+    AddBlock(x, y + height + 1, z + 2, "leaves", true);
 }
 
 void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, int width, string type) {
@@ -376,7 +400,14 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
-void GenerateChunk(int cx, int cz) {
+uint64_t hash_coords(int x, int z, uint64_t seed = 123456789ULL) {
+    uint64_t h = seed;
+    h ^= static_cast<uint64_t>(x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= static_cast<uint64_t>(z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+
+void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     string ckey = chunkKey(cx, cz);
     if (chunks.count(ckey)) return;
 
@@ -386,20 +417,74 @@ void GenerateChunk(int cx, int cz) {
     ch.dirty = true;
     chunks[ckey] = ch;
 
-    int grasslayers = 1;
-    int dirtlayers = 3;
-    int stonelayers = 5;
+    // Step 1: Raw heights (16×16 grid)
+    int raw_heights[16][16];
 
-    // Grass layer at y=0 (top exposed)
-    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers, 16, "grass");
+    for (int lx = 0; lx < 16; ++lx) {
+        for (int lz = 0; lz < 16; ++lz) {
+            int wx = cx * 16 + lx;
+            int wz = cz * 16 + lz;
 
-    // Dirt layers below grass (y=-1 to -3)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers, cz*16, 16, dirtlayers, 16, "dirt");
+            uint64_t h = hash_coords(wx, wz, seed);
+            std::minstd_rand gen(h);
 
-    // Stone below dirt (y=-4 to -8)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers, cz*16, 16, stonelayers, 16, "stone");
-    GenerateTreeBaseAt(cx*16 + 1, 0, cz*16 + 1);
-    
+            int base = 1 + (gen() % 2);
+            int mountain = (gen() % 100 < 95) ? (gen() % 1) : 0;
+            raw_heights[lx][lz] = base + mountain;
+        }
+    }
+
+    // Step 2: Smooth heights (average with neighbors)
+    int smoothed_heights[16][16];
+
+    for (int lx = 0; lx < 16; ++lx) {
+        for (int lz = 0; lz < 16; ++lz) {
+            float sum = raw_heights[lx][lz];
+            int count = 1;
+
+            // Left
+            if (lx > 0) { sum += raw_heights[lx-1][lz] += SDL_randf() * 1.05f; count++; }
+            // Right
+            if (lx < 15) { sum += raw_heights[lx+1][lz] += SDL_randf() * 1.05f; count++; }
+            // Back
+            if (lz > 0) { sum += raw_heights[lx][lz-1] += SDL_randf() * 1.05f; count++; }
+            // Front
+            if (lz < 15) { sum += raw_heights[lx][lz+1] += SDL_randf() * 1.05f; count++; }
+
+            smoothed_heights[lx][lz] = static_cast<int>(sum / (count - SDL_rand(2)));
+        }
+    }
+
+    // Step 3: Fill the world with blocks using smoothed heights
+    for (int lx = 0; lx < 16; ++lx) {
+        for (int lz = 0; lz < 16; ++lz) {
+            int wx = cx * 16 + lx;
+            int wz = cz * 16 + lz;
+            int surface_y = smoothed_heights[lx][lz];
+
+            for (int wy = -30; wy <= surface_y; ++wy) {
+                string type = "stone";
+                if (wy == surface_y)     type = "grass";
+                else if (wy > surface_y - 4) type = "dirt";
+                AddBlock(wx, wy, wz, type, false);
+            }
+        }
+    }
+
+    // Trees — only on grass
+    int num_trees = (rng() % 5);  // 1–4 trees per chunk
+    for (int i = 0; i < num_trees; ++i) {
+        int tx = cx*16 + (rng() % 16);
+        int tz = cz*16 + (rng() % 16);
+
+        // Only place tree if there's grass below
+        if (worldBlocks[posKey(tx, 0, tz)] == "grass" || worldBlocks[posKey(tx, 0, tz)] == "dirt") {
+            GenerateTreeBaseAt(tx, 1, tz);
+        }
+    }
+
+    // Force rebuild after everything is placed
+    //buildChunkMesh(ch);
 }
 
 void GenerateUnloadedChunks() {
@@ -464,9 +549,7 @@ void tryBreakInFront() {
     breakCooldown = BREAK_COOLDOWN_TIME / 2;
 }
 
-void AddTree(int BaseBlockX, int BaseBlockY, int BaseBlockZ){
 
-}
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 
