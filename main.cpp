@@ -42,6 +42,7 @@ vector<tuple<string, string, string>> TextureAtlas = {
     {"dirt.png",      "dirt.png",      "dirt.png"},
     {"stone.png",     "stone.png",     "stone.png"},
     {"log_top.png", "wood.png", "log_top.png"},
+    {"leaves.png", "leaves.png", "leaves.png"},
     {"error.png",     "error.png",     "error.png"}
 };
 
@@ -50,7 +51,8 @@ unordered_map<string, int> KeyMapper = {
     {"grass", 1},
     {"dirt",  2},
     {"stone", 3},
-    {"wood", 4}
+    {"wood", 4},
+    {"leaves", 5}
 };
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
@@ -303,14 +305,62 @@ void buildChunkMesh(Chunk& chunk) {
 
 // ─── Chunk Generation ──────────────────────────────────────────────────────
 
-void AddBlock(int x, int y, int z, string type) {
+void AddBlock(int x, int y, int z, string type, bool Overwrite) {
     string key = posKey(x, y, z);
-    if (!isSolid(x,y, z)){
-    worldBlocks[key] = type;
+    if (!(isSolid(x,y, z) && !Overwrite)){
+        worldBlocks[key] = type;
+        if (type == "wood"){
+            //cout << "Placed " << type << " at " << key << endl;  // ← add this line
+        }
     }
-    if (type == "grass"){
-    cout << "Placed " << type << " at " << key << endl;  // ← add this line
-    }
+}
+
+void GenerateTreeBaseAt(int x, int y, int z){
+    int height = SDL_rand(2) + 1;
+    AddBlock(x, y + height - 1, z, "wood", false);
+    AddBlock(x, y + height, z, "wood", true);
+    AddBlock(x, y + height + 1, z, "wood", true);
+    AddBlock(x, y + height + 2, z, "wood", true);
+    AddBlock(x, y + height + 3, z, "wood", true);
+    AddBlock(x, y + height + 4, z, "leaves", true);
+    AddBlock(x, y + height + 3, z + 1, "leaves", true);
+    AddBlock(x, y + height + 3, z - 1, "leaves", true);
+    AddBlock(x + 1, y + height + 3, z, "leaves", true);
+    AddBlock(x - 1, y + height + 3, z, "leaves", true);
+    AddBlock(x, y + height + 2, z + 1, "leaves", true);
+    AddBlock(x, y + height + 2, z - 1, "leaves", true);
+    AddBlock(x + 1, y + height + 2, z, "leaves", true);
+    AddBlock(x - 1, y + height + 2, z, "leaves", true);
+    AddBlock(x + 1, y + height + 2, z + 1, "leaves", true);
+    AddBlock(x + 1, y + height + 2, z - 1, "leaves", true);
+    AddBlock(x - 1, y + height + 2, z - 1, "leaves", true);
+    AddBlock(x - 1, y + height + 2, z + 1, "leaves", true);
+    AddBlock(x, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x + 1, y + height + 1, z, "leaves", true);
+    AddBlock(x - 1, y + height + 1, z, "leaves", true);
+    AddBlock(x + 1, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x + 1, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x - 1, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x - 1, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x + 2, y + height + 1, z, "leaves", true);
+    AddBlock(x - 2, y + height + 1, z, "leaves", true);
+    AddBlock(x + 2, y + height + 1, z + 2, "leaves", true);
+    AddBlock(x + 2, y + height + 1, z - 2, "leaves", true);
+    AddBlock(x - 2, y + height + 1, z - 2, "leaves", true);
+    AddBlock(x - 2, y + height + 1, z + 2, "leaves", true);
+    AddBlock(x + 1, y + height + 1, z + 2, "leaves", true);
+    AddBlock(x + 1, y + height + 1, z - 2, "leaves", true);
+    AddBlock(x - 1, y + height + 1, z - 2, "leaves", true);
+    AddBlock(x - 1, y + height + 1, z + 2, "leaves", true);
+    AddBlock(x + 2, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x + 2, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x - 2, y + height + 1, z - 1, "leaves", true);
+    AddBlock(x - 2, y + height + 1, z + 1, "leaves", true);
+    AddBlock(x, height + 1, z - 2, "leaves", true);
+    AddBlock(x, height + 1, z + 2, "leaves", true);
 }
 
 void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, int width, string type) {
@@ -320,7 +370,7 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
                 int x = startX + dx;
                 int y = startY - dy;
                 int z = startZ + dz;
-                AddBlock(x, y, z, type);
+                AddBlock(x, y, z, type, false);
             }
         }
     }
@@ -348,8 +398,8 @@ void GenerateChunk(int cx, int cz) {
 
     // Stone below dirt (y=-4 to -8)
     AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers, cz*16, 16, stonelayers, 16, "stone");
-
-    AddBlock(cx * 16, 0, cz, "wood");
+    GenerateTreeBaseAt(cx*16 + 1, 0, cz*16 + 1);
+    
 }
 
 void GenerateUnloadedChunks() {
@@ -462,6 +512,7 @@ int main(int argc, char* argv[]) {
     Textures["error.png"]     = LoadTexture("error.png");
     Textures["wood.png"]      = LoadTexture("wood.png");
     Textures["log_top.png"]   = LoadTexture("log_top.png");
+    Textures["leaves.png"]    = LoadTexture("leaves.png");
 
     createShader();
     glUseProgram(shaderProgram);
@@ -489,7 +540,6 @@ int main(int argc, char* argv[]) {
             }
 
             if (e.type == SDL_EVENT_KEY_DOWN) {
-                cout << "[KEY] " << e.key.key << endl;
                 if (e.key.key == SDLK_ESCAPE) running = false;
 
                 // Break on E
