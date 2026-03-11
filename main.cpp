@@ -451,7 +451,7 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
             // Front
             if (lz < 15) { sum += raw_heights[lx][lz+1] += SDL_randf() * 1.05f; count++; }
 
-            smoothed_heights[lx][lz] = static_cast<int>(sum / (count - SDL_rand(2)));
+            smoothed_heights[lx][lz] = static_cast<int>(sum / (count + SDL_randf()));
         }
     }
 
@@ -563,7 +563,7 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 
-    SDL_Window* window = SDL_CreateWindow("Voxel Test - Modern GL", 1280, 720, SDL_WINDOW_OPENGL);
+    SDL_Window* window = SDL_CreateWindow("Minecraft", 1280, 720, SDL_WINDOW_OPENGL);
     if (!window) {
         cout << "Window failed: " << SDL_GetError() << endl;
         SDL_Quit();
