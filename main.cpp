@@ -41,6 +41,7 @@ vector<tuple<string, string, string>> TextureAtlas = {
     {"grass_top.png", "grass.png",     "dirt.png"},
     {"dirt.png",      "dirt.png",      "dirt.png"},
     {"stone.png",     "stone.png",     "stone.png"},
+    {"log_top.png", "wood.png", "log_top.png"},
     {"error.png",     "error.png",     "error.png"}
 };
 
@@ -48,7 +49,8 @@ unordered_map<string, int> KeyMapper = {
     {"error", 0},
     {"grass", 1},
     {"dirt",  2},
-    {"stone", 3}
+    {"stone", 3},
+    {"wood", 4}
 };
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
@@ -303,7 +305,9 @@ void buildChunkMesh(Chunk& chunk) {
 
 void AddBlock(int x, int y, int z, string type) {
     string key = posKey(x, y, z);
+    if (!isSolid(x,y, z)){
     worldBlocks[key] = type;
+    }
     if (type == "grass"){
     cout << "Placed " << type << " at " << key << endl;  // ← add this line
     }
@@ -314,7 +318,7 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
         for (int dy = 0; dy < height; ++dy) {
             for (int dx = 0; dx < width; ++dx) {
                 int x = startX + dx;
-                int y = startY + dy;
+                int y = startY - dy;
                 int z = startZ + dz;
                 AddBlock(x, y, z, type);
             }
@@ -333,18 +337,19 @@ void GenerateChunk(int cx, int cz) {
     chunks[ckey] = ch;
 
     int grasslayers = 1;
-    int stonelayers = 5;
     int dirtlayers = 3;
-
+    int stonelayers = 5;
 
     // Grass layer at y=0 (top exposed)
-    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers + 2, 16, "grass");
+    AddLotsOfBlocks(cx*16,  0, cz*16, 16, grasslayers, 16, "grass");
 
     // Dirt layers below grass (y=-1 to -3)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers - 2, cz*16, 16, dirtlayers + 2, 16, "dirt");
+    AddLotsOfBlocks(cx*16, 0 - grasslayers, cz*16, 16, dirtlayers, 16, "dirt");
 
     // Stone below dirt (y=-4 to -8)
-    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers - 2, cz*16, 16, stonelayers, 16, "stone");
+    AddLotsOfBlocks(cx*16, 0 - grasslayers - dirtlayers, cz*16, 16, stonelayers, 16, "stone");
+
+    AddBlock(cx * 16, 0, cz, "wood");
 }
 
 void GenerateUnloadedChunks() {
@@ -410,7 +415,7 @@ void tryBreakInFront() {
 }
 
 void AddTree(int BaseBlockX, int BaseBlockY, int BaseBlockZ){
-    
+
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
@@ -455,6 +460,8 @@ int main(int argc, char* argv[]) {
     Textures["dirt.png"]      = LoadTexture("dirt.png");
     Textures["stone.png"]     = LoadTexture("stone.png");
     Textures["error.png"]     = LoadTexture("error.png");
+    Textures["wood.png"]      = LoadTexture("wood.png");
+    Textures["log_top.png"]   = LoadTexture("log_top.png");
 
     createShader();
     glUseProgram(shaderProgram);
