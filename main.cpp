@@ -8,6 +8,7 @@
 #include <random>
 #include <cstdint>
 
+
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 
@@ -58,6 +59,8 @@ unordered_map<string, int> KeyMapper = {
 };
 
 std::mt19937 rng;
+
+std::queue<pair<int,int>> chunkQueue;
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
@@ -397,7 +400,7 @@ void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
 
         if (SDL_rand(2) == 1){
 
-        // Bigger radius for leaves (they spread 2–3 blocks out)
+        /* Bigger radius for leaves (they spread 2–3 blocks out)
         for (int dx = -1; dx <= 1; ++dx) {
             for (int dz = -1; dz <= 1; ++dz) {
                 string nkey = chunkKey(cx + dx, cz + dz);
@@ -406,7 +409,7 @@ void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
                     it->second.dirty = true;
                 }
             }
-        }
+        }*/
 
         if (type == "leaves") {
             //cout << "Leaf placed at border? Marked neighbors dirty" << endl;
@@ -537,13 +540,41 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     //buildChunkMesh(ch);
 }
 
-void GenerateUnloadedChunks() {
+// Call this every frame (or every 0.2–0.5 seconds to reduce load)
+void UpdateChunks() {
     int px = floor(playerX / 16.0f);
     int pz = floor(playerZ / 16.0f);
 
-    for (int dx = -2; dx <= 2; ++dx) {
-        for (int dz = -2; dz <= 2; ++dz) {
-            GenerateChunk(px + dx, pz + dz);
+    const int LOAD_RADIUS = 3;  // adjust: 3–6 is good balance (9–49 chunks)
+
+    for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx) {
+        for (int dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; ++dz) {
+            int cx = px + dx;
+            int cz = pz + dz;
+            string ckey = chunkKey(cx, cz);
+
+            if (chunks.find(ckey) == chunks.end()) {
+                // New chunk → generate and queue for building
+                GenerateChunk(cx, cz);
+                chunkQueue.push({cx, cz});
+            }
+        }
+    }
+
+    // Process a limited number of queued chunks per frame to avoid lag spikes
+    const int MAX_PER_FRAME = 2;  // tune this: 1–4
+    int processed = 0;
+
+    while (!chunkQueue.empty() && processed < MAX_PER_FRAME) {
+        auto [cx, cz] = chunkQueue.front();
+        chunkQueue.pop();
+
+        string ckey = chunkKey(cx, cz);
+        auto it = chunks.find(ckey);
+        if (it != chunks.end()) {
+            buildChunkMesh(it->second);
+            cout << "Built chunk " << ckey << " (queue size now: " << chunkQueue.size() << ")" << endl;
+            processed++;
         }
     }
 }
@@ -730,7 +761,7 @@ int main(int argc, char* argv[]) {
         if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
         if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
 
-        GenerateUnloadedChunks();
+UpdateChunks();
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
