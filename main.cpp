@@ -307,6 +307,83 @@ void buildChunkMesh(Chunk& chunk) {
     chunk.dirty = false;
 }
 
+class Perlin {
+private:
+    std::vector<int> p;  // permutation table
+
+    float fade(float t) const { return t * t * t * (t * (t * 6 - 15) + 10); }
+    float lerp(float t, float a, float b) const { return a + t * (b - a); }
+    float grad(int hash, float x, float y) const {
+        int h = hash & 15;
+        float u = h < 8 ? x : y;
+        float v = h < 4 ? y : h == 12 || h == 14 ? x : 0;
+        return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+    }
+
+public:
+    Perlin(unsigned int seed = 0) {
+        p.resize(512);
+        std::vector<int> permutation = {
+            151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,
+            8,99,37,240,21,10,23,190,6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,
+            35,11,32,57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,74,165,71,
+            134,139,48,27,166,77,146,158,231,83,111,229,122,60,211,133,230,220,105,92,41,
+            55,46,245,40,244,102,143,54,65,25,63,161,1,216,80,73,209,76,132,187,208,89,
+            18,169,200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,52,217,226,
+            250,124,123,5,202,38,147,118,126,255,82,85,212,207,206,59,227,47,16,58,17,182,
+            189,28,42,223,183,170,213,119,248,152,2,44,154,163,70,221,153,101,155,167,43,
+            172,9,129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,218,246,97,
+            228,251,34,242,193,238,210,144,12,191,179,162,241,81,51,145,235,249,14,239,
+            107,49,192,214,31,181,199,106,157,184,84,204,176,115,121,50,45,127,4,150,254,
+            138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180
+        };
+
+        // Shuffle with seed
+        std::mt19937 rng(seed);
+        std::shuffle(permutation.begin(), permutation.end(), rng);
+
+        for (int i = 0; i < 256; ++i) {
+            p[256 + i] = p[i] = permutation[i];
+        }
+    }
+
+    float noise(float x, float y) const {
+        int X = static_cast<int>(std::floor(x)) & 255;
+        int Y = static_cast<int>(std::floor(y)) & 255;
+
+        x -= std::floor(x);
+        y -= std::floor(y);
+
+        float u = fade(x);
+        float v = fade(y);
+
+        int A = p[X] + Y, AA = p[A], AB = p[A + 1];
+        int B = p[X + 1] + Y, BA = p[B], BB = p[B + 1];
+
+        return lerp(v,
+            lerp(u, grad(p[AA], x, y), grad(p[BA], x-1, y)),
+            lerp(u, grad(p[AB], x, y-1), grad(p[BB], x-1, y-1))
+        );
+    }
+
+    // Fractional Brownian Motion (multiple octaves for detail)
+    float fbm(float x, float y, int octaves = 6, float persistence = 0.5f) const {
+        float total = 0;
+        float frequency = 1.0f;
+        float amplitude = 1.0f;
+        float maxValue = 0;
+
+        for (int i = 0; i < octaves; ++i) {
+            total += noise(x * frequency, y * frequency) * amplitude;
+            maxValue += amplitude;
+            amplitude *= persistence;
+            frequency *= 2.0f;
+        }
+
+        return total / maxValue;
+    }
+};
+
 // ─── Chunk Generation ──────────────────────────────────────────────────────
 
 void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
@@ -417,55 +494,28 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     ch.dirty = true;
     chunks[ckey] = ch;
 
-    // Step 1: Raw heights (16×16 grid)
-    int raw_heights[16][16];
+    Perlin perlin(seed);  // seeded once per world
 
     for (int lx = 0; lx < 16; ++lx) {
         for (int lz = 0; lz < 16; ++lz) {
             int wx = cx * 16 + lx;
             int wz = cz * 16 + lz;
 
-            uint64_t h = hash_coords(wx, wz, seed);
-            std::minstd_rand gen(h);
+            // Scale coordinates (adjust for terrain size)
+            float fx = wx * 0.02f;   // smaller = larger features
+            float fz = wz * 0.02f;
 
-            int base = 1 + (gen() % 2);
-            int mountain = (gen() % 100 < 95) ? (gen() % 1) : 0;
-            raw_heights[lx][lz] = base + mountain;
-        }
-    }
+            // Get smooth noise value (-1..1)
+            float noiseValue = perlin.fbm(fx, fz, 6, 0.5f);
 
-    // Step 2: Smooth heights (average with neighbors)
-    int smoothed_heights[16][16];
+            // Map to height range (e.g. -20 to +40)
+            int height = static_cast<int>(noiseValue * 30.0f + 10.0f);  // base around 10, range ~ -20 to +40
 
-    for (int lx = 0; lx < 16; ++lx) {
-        for (int lz = 0; lz < 16; ++lz) {
-            float sum = raw_heights[lx][lz];
-            int count = 1;
-
-            // Left
-            if (lx > 0) { sum += raw_heights[lx-1][lz] += SDL_randf() * 1.05f; count++; }
-            // Right
-            if (lx < 15) { sum += raw_heights[lx+1][lz] += SDL_randf() * 1.05f; count++; }
-            // Back
-            if (lz > 0) { sum += raw_heights[lx][lz-1] += SDL_randf() * 1.05f; count++; }
-            // Front
-            if (lz < 15) { sum += raw_heights[lx][lz+1] += SDL_randf() * 1.05f; count++; }
-
-            smoothed_heights[lx][lz] = static_cast<int>(sum / (count + SDL_randf()));
-        }
-    }
-
-    // Step 3: Fill the world with blocks using smoothed heights
-    for (int lx = 0; lx < 16; ++lx) {
-        for (int lz = 0; lz < 16; ++lz) {
-            int wx = cx * 16 + lx;
-            int wz = cz * 16 + lz;
-            int surface_y = smoothed_heights[lx][lz];
-
-            for (int wy = -30; wy <= surface_y; ++wy) {
+            // Fill column
+            for (int wy = -30; wy <= height; ++wy) {
                 string type = "stone";
-                if (wy == surface_y)     type = "grass";
-                else if (wy > surface_y - 4) type = "dirt";
+                if (wy == height)     type = "grass";
+                else if (wy > height - 4) type = "dirt";
                 AddBlock(wx, wy, wz, type, false);
             }
         }
