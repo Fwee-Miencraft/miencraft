@@ -7,7 +7,8 @@
 #include <tuple>
 #include <random>
 #include <cstdint>
-
+#include <future>
+#include <atomic>
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -39,6 +40,8 @@ const float BREAK_COOLDOWN_TIME = 0.3f;  // seconds
 
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
+std::mutex worldBlocksMutex;
+
 
 vector<tuple<string, string, string>> TextureAtlas = {
     {"grass_top.png", "grass.png",     "dirt.png"},
@@ -183,10 +186,18 @@ struct Vertex { float x,y,z, u,v; };
 
 struct Chunk {
     int cx, cz;
-    std::unordered_map<GLuint, GLuint> vaos;   // textureID → VAO
-    std::unordered_map<GLuint, GLuint> vbos;   // textureID → VBO
-    std::unordered_map<GLuint, GLsizei> counts; // textureID → vertex count
+    std::unordered_map<GLuint, GLuint> vaos;
+    std::unordered_map<GLuint, GLuint> vbos;
+    std::unordered_map<GLuint, GLsizei> counts;
     bool dirty = true;
+
+    // Add this constructor
+    Chunk(int cx_, int cz_) : cx(cx_), cz(cz_), dirty(true) {
+        // vaos/vbos/counts are default-constructed (empty)
+    }
+
+    // Optional: default constructor if needed elsewhere
+    Chunk() = default;
 };
 unordered_map<string, Chunk> chunks;
 
@@ -391,16 +402,16 @@ public:
 
 void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
     string key = posKey(x, y, z);
+
+    std::lock_guard<std::mutex> lock(worldBlocksMutex);  // protect map
+
     if (Overwrite || worldBlocks.count(key) == 0) {
         worldBlocks[key] = type;
 
-        // Mark current chunk + neighbors in a 3×3 area (or even 5×5 if needed)
+        // Your existing dirty marking...
         int cx = x / 16;
         int cz = z / 16;
 
-        if (SDL_rand(2) == 1){
-
-        /* Bigger radius for leaves (they spread 2–3 blocks out)
         for (int dx = -1; dx <= 1; ++dx) {
             for (int dz = -1; dz <= 1; ++dz) {
                 string nkey = chunkKey(cx + dx, cz + dz);
@@ -409,12 +420,7 @@ void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
                     it->second.dirty = true;
                 }
             }
-        }*/
-
-        if (type == "leaves") {
-            //cout << "Leaf placed at border? Marked neighbors dirty" << endl;
         }
-    }
     }
 }
 
@@ -489,32 +495,27 @@ uint64_t hash_coords(int x, int z, uint64_t seed = 123456789ULL) {
 
 void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     string ckey = chunkKey(cx, cz);
-    if (chunks.count(ckey)) return;
 
-    Chunk ch;
-    ch.cx = cx;
-    ch.cz = cz;
+    // Use try_emplace to construct in-place (no copy)
+    auto [it, inserted] = chunks.try_emplace(ckey, cx, cz);
+    if (!inserted) return;  // already exists
+
+    Chunk& ch = it->second;
     ch.dirty = true;
-    chunks[ckey] = ch;
 
-    Perlin perlin(seed);  // seeded once per world
+    Perlin perlin(seed);
 
     for (int lx = 0; lx < 16; ++lx) {
         for (int lz = 0; lz < 16; ++lz) {
             int wx = cx * 16 + lx;
             int wz = cz * 16 + lz;
 
-            // Scale coordinates (adjust for terrain size)
-            float fx = wx * 0.02f;   // smaller = larger features
+            float fx = wx * 0.02f;
             float fz = wz * 0.02f;
 
-            // Get smooth noise value (-1..1)
             float noiseValue = perlin.fbm(fx, fz, 6, 0.5f);
+            int height = static_cast<int>(noiseValue * 30.0f + 10.0f);
 
-            // Map to height range (e.g. -20 to +40)
-            int height = static_cast<int>(noiseValue * 30.0f + 10.0f);  // base around 10, range ~ -20 to +40
-
-            // Fill column
             for (int wy = -30; wy <= height; ++wy) {
                 string type = "stone";
                 if (wy == height)     type = "grass";
@@ -524,28 +525,26 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
         }
     }
 
-    // Trees — only on grass
-    int num_trees = (rng() % 5);  // 1–4 trees per chunk
+    // Trees...
+    int num_trees = (rng() % 5);
     for (int i = 0; i < num_trees; ++i) {
         int tx = cx*16 + (rng() % 16);
         int tz = cz*16 + (rng() % 16);
 
-        // Only place tree if there's grass below
         if (worldBlocks[posKey(tx, 0, tz)] == "grass" || worldBlocks[posKey(tx, 0, tz)] == "dirt") {
             GenerateTreeBaseAt(tx, 1, tz);
         }
     }
 
-    // Force rebuild after everything is placed
-    //buildChunkMesh(ch);
+    // No buildChunkMesh here — main thread will do it
 }
 
-// Call this every frame (or every 0.2–0.5 seconds to reduce load)
+
 void UpdateChunks() {
     int px = floor(playerX / 16.0f);
     int pz = floor(playerZ / 16.0f);
 
-    const int LOAD_RADIUS = 3;  // adjust: 3–6 is good balance (9–49 chunks)
+    const int LOAD_RADIUS = 3;
 
     for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx) {
         for (int dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; ++dz) {
@@ -554,27 +553,11 @@ void UpdateChunks() {
             string ckey = chunkKey(cx, cz);
 
             if (chunks.find(ckey) == chunks.end()) {
-                // New chunk → generate and queue for building
-                GenerateChunk(cx, cz);
-                chunkQueue.push({cx, cz});
+                // Launch async generation
+                std::async(std::launch::async, [cx, cz]() {  // no need for ckey capture
+                    GenerateChunk(cx, cz);
+                });
             }
-        }
-    }
-
-    // Process a limited number of queued chunks per frame to avoid lag spikes
-    const int MAX_PER_FRAME = 2;  // tune this: 1–4
-    int processed = 0;
-
-    while (!chunkQueue.empty() && processed < MAX_PER_FRAME) {
-        auto [cx, cz] = chunkQueue.front();
-        chunkQueue.pop();
-
-        string ckey = chunkKey(cx, cz);
-        auto it = chunks.find(ckey);
-        if (it != chunks.end()) {
-            buildChunkMesh(it->second);
-            cout << "Built chunk " << ckey << " (queue size now: " << chunkQueue.size() << ")" << endl;
-            processed++;
         }
     }
 }
@@ -784,12 +767,18 @@ UpdateChunks();
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
         glUseProgram(shaderProgram);
-for (auto& [ckey, chunk] : chunks) {
-    if (chunk.dirty) buildChunkMesh(chunk);
+int rebuiltThisFrame = 0;
+const int MAX_REBUILDS_PER_FRAME = 1;
+
+for (auto& pair : chunks) {
+    Chunk& chunk = pair.second;
+
+    if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
+        buildChunkMesh(chunk);
+        rebuiltThisFrame++;
+    }
 
     if (chunk.counts.empty()) continue;
-
-    //ing chunk " << ckey << " with " << chunk.vaos.size() << " texture groups" << endl;
 
     for (const auto& [texID, vao] : chunk.vaos) {
         glBindTexture(GL_TEXTURE_2D, texID);
