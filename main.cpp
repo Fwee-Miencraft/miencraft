@@ -625,9 +625,9 @@ void UpdateChunks() {
 
             if (chunks.find(ckey) == chunks.end()) {
                 // Launch async generation
-                std::async(std::launch::async, [cx, cz]() {  // no need for ckey capture
-                    GenerateChunk(cx, cz);
-                });
+            auto _ = std::async(std::launch::async, [cx, cz]() {
+                GenerateChunk(cx, cz);
+            });
             }
         }
     }
