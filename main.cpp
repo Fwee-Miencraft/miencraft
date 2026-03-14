@@ -41,7 +41,9 @@ const float BREAK_COOLDOWN_TIME = 0.3f;  // seconds
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
 std::mutex worldBlocksMutex;
-
+SDL_AudioStream* BackGroundMusic = nullptr;
+Uint8* musicBuffer = nullptr;
+Uint32 musicLength = 0;
 
 vector<tuple<string, string, string>> TextureAtlas = {
     {"grass_top.png", "grass.png",     "dirt.png"},
@@ -65,7 +67,76 @@ std::mt19937 rng;
 
 std::queue<pair<int,int>> chunkQueue;
 
+std::vector<std::string> playlist = {
+    "Assets/sound/c418_subwoofer_lullaby.wav",
+    "Assets/sound/c418_living_mice.wav"
+};
+
+int currentSong = 0;
+
+SDL_AudioDeviceID device;
+
 // ─── Helper Functions ───────────────────────────────────────────────────────
+
+
+bool PlayMusic(SDL_AudioDeviceID device, const char* file)
+{
+    SDL_AudioSpec spec;
+    Uint8* buffer;
+    Uint32 length;
+
+    if (!SDL_LoadWAV(file, &spec, &buffer, &length))
+    {
+        std::cout << "Failed to load WAV: " << SDL_GetError() << std::endl;
+        return false;
+    }
+
+    BackGroundMusic = SDL_CreateAudioStream(&spec, &spec);
+
+    if (!BackGroundMusic)
+    {
+        std::cout << "Stream failed: " << SDL_GetError() << std::endl;
+        return false;
+    }
+
+    SDL_PutAudioStreamData(BackGroundMusic, buffer, length);
+
+    SDL_BindAudioStream(device, BackGroundMusic);
+
+    SDL_free(buffer);
+
+    return true;
+}
+
+bool LoadSong(const std::string& file, SDL_AudioSpec& spec)
+{
+    if (musicBuffer)
+        SDL_free(musicBuffer);
+
+    if (!SDL_LoadWAV(file.c_str(), &spec, &musicBuffer, &musicLength))
+    {
+        std::cout << "Failed to load: " << SDL_GetError() << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool PlayNextSong(SDL_AudioDeviceID device, SDL_AudioSpec& spec)
+{
+    currentSong++;
+
+    if (currentSong >= playlist.size())
+        currentSong = 0;
+
+    if (!LoadSong(playlist[currentSong], spec))
+        return false;
+
+    SDL_ClearAudioStream(BackGroundMusic);
+    SDL_PutAudioStreamData(BackGroundMusic, musicBuffer, musicLength);
+
+    return true;
+}
 
 string posKey(int x, int y, int z) {
     return to_string(x) + "_" + to_string(y) + "_" + to_string(z);
@@ -102,7 +173,7 @@ tuple<string,string,string> Find_tuple(const string& name) {
     }
 
     cout << "Index not found for " << name << " (value=" << target << ")" << endl;
-    return {"error.png", "error.png", "error.png"};
+    return {"grass_top.png", "grass.png", "dirt.png"};
 }
 
 // ─── Texture Loading ────────────────────────────────────────────────────────
@@ -618,7 +689,7 @@ void tryBreakInFront() {
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         cout << "SDL init failed: " << SDL_GetError() << endl;
         return 1;
     }
@@ -670,6 +741,24 @@ int main(int argc, char* argv[]) {
     SDL_Event e;
 
     Uint64 lastTime = SDL_GetPerformanceCounter();
+
+SDL_AudioSpec spec;
+LoadSong(playlist[currentSong], spec);
+
+BackGroundMusic = SDL_CreateAudioStream(&spec, &spec);
+device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+
+SDL_PutAudioStreamData(BackGroundMusic, musicBuffer, musicLength);
+SDL_BindAudioStream(device, BackGroundMusic);
+SDL_ResumeAudioDevice(device);
+
+    SDL_ResumeAudioDevice(device);
+
+    if (!device)
+    {
+        std::cout << "Audio device failed: " << SDL_GetError() << std::endl;
+        return 1;
+    }
 
     while (running) {
         Uint64 now = SDL_GetPerformanceCounter();
@@ -767,29 +856,32 @@ UpdateChunks();
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
         glUseProgram(shaderProgram);
-int rebuiltThisFrame = 0;
-const int MAX_REBUILDS_PER_FRAME = 1;
+        int rebuiltThisFrame = 0;
+        const int MAX_REBUILDS_PER_FRAME = 1;
 
-for (auto& pair : chunks) {
-    Chunk& chunk = pair.second;
+        for (auto& pair : chunks) {
+            Chunk& chunk = pair.second;
 
-    if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
-        buildChunkMesh(chunk);
-        rebuiltThisFrame++;
-    }
+            if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
+                buildChunkMesh(chunk);
+                rebuiltThisFrame++;
+            }
 
-    if (chunk.counts.empty()) continue;
+            if (chunk.counts.empty()) continue;
 
-    for (const auto& [texID, vao] : chunk.vaos) {
-        glBindTexture(GL_TEXTURE_2D, texID);
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
-    }
+            for (const auto& [texID, vao] : chunk.vaos) {
+                glBindTexture(GL_TEXTURE_2D, texID);
+                glBindVertexArray(vao);
+                glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
+            }
+        }
+        if (SDL_GetAudioStreamQueued(BackGroundMusic) == 0)
+{
+    PlayNextSong(device, spec);
 }
-
         SDL_GL_SwapWindow(window);
     }
-
+    SDL_CloseAudioDevice(device);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
