@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <future>
 #include <atomic>
+#include <queue>
+#include <algorithm>
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
