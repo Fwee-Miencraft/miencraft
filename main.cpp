@@ -68,7 +68,9 @@ std::mt19937 rng;
 std::queue<pair<int,int>> chunkQueue;
 
 std::vector<std::string> playlist = {
+    "Assets/sound/minecraft.wav",
     "Assets/sound/c418_subwoofer_lullaby.wav",
+    "Assets/sound/mice_on_venus.wav",
     "Assets/sound/c418_living_mice.wav"
 };
 
@@ -161,7 +163,7 @@ tuple<string,string,string> Find_tuple(const string& name) {
     auto it = KeyMapper.find(name);
     if (it == KeyMapper.end()) {
         cout << "Unknown block: " << name << endl;
-        return {"error.png", "error.png", "error.png"};
+        return {"grass_top.png", "grass.png", "dirt.png"};
     }
 
     int target = it->second;  // 1=grass, 2=dirt, 3=stone
@@ -179,7 +181,7 @@ tuple<string,string,string> Find_tuple(const string& name) {
 // ─── Texture Loading ────────────────────────────────────────────────────────
 
 GLuint LoadTexture(const string& filename) {
-    string fullpath = string(SDL_GetBasePath()) + "Assets/" + filename;
+    string fullpath = string(SDL_GetBasePath()) + "Assets/textures/" + filename;
     SDL_Surface* raw = IMG_Load(fullpath.c_str());
     if (!raw) {
         cout << "Failed to load " << filename << ": " << SDL_GetError() << endl;
