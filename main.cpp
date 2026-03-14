@@ -664,7 +664,6 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
 
         if (surfaceY >= -30) {
             GenerateTreeBaseAt(tx, surfaceY + 1, tz);
-            cout << "Tree placed at (" << tx << ", " << surfaceY + 1 << ", " << tz << ")" << endl;
         }
     }
 }
@@ -674,7 +673,7 @@ void UpdateChunks() {
     int px = floor(playerX / 16.0f);
     int pz = floor(playerZ / 16.0f);
 
-    const int LOAD_RADIUS = 3;
+    const int LOAD_RADIUS = 4;
 
     for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx) {
         for (int dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; ++dz) {
@@ -756,6 +755,7 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetSwapInterval(1);
 
     SDL_Window* window = SDL_CreateWindow("Minecraft", 1280, 720, SDL_WINDOW_OPENGL);
     if (!window) {
@@ -796,8 +796,8 @@ int main(int argc, char* argv[]) {
     Textures["leaves.png"]    = LoadTexture("leaves.png");
     Textures["hotbar.png"]    = LoadTexture("hotbar.png");
 
-// Create HUD shader (you already have createHudShader(), good)
-createHudShader();
+    // Create HUD shader (you already have createHudShader(), good)
+    createHudShader();
 
 // Load hotbar texture
 Textures["hotbar.png"] = LoadTexture("hotbar.png");
@@ -812,7 +812,7 @@ float screenW = 1280.0f;
 float screenH = 720.0f;
 
 float x = (screenW - hotbarWidth * scale) / 2.0f;      // center
-float y = screenH - hotbarHeight * scale - 20.0f;      // near bottom
+float y = screenH - hotbarHeight * scale - 625.0f;      // near bottom
 
 float vertices[] = {
     //   x          y         u     v
@@ -969,8 +969,10 @@ UpdateChunks();
             Chunk& chunk = pair.second;
 
             if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
-                buildChunkMesh(chunk);
-                rebuiltThisFrame++;
+                if (SDL_rand(2)+1 == 1){
+                    buildChunkMesh(chunk);
+                    rebuiltThisFrame++;
+                }
             }
 
             if (chunk.counts.empty()) continue;
