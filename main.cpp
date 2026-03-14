@@ -38,9 +38,14 @@ float mouseSensitivity = 0.15f;
 float breakCooldown = 0.0f;
 const float BREAK_COOLDOWN_TIME = 0.3f;  // seconds
 
+GLuint hudShaderProgram = 0;
+GLuint hotbarVAO = 0;
+GLuint hotbarVBO = 0;
+GLint hotbarTextureID = 0;
+
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
-std::mutex worldBlocksMutex;
+mutex worldBlocksMutex;
 SDL_AudioStream* BackGroundMusic = nullptr;
 Uint8* musicBuffer = nullptr;
 Uint32 musicLength = 0;
@@ -63,11 +68,11 @@ unordered_map<string, int> KeyMapper = {
     {"leaves", 5}
 };
 
-std::mt19937 rng;
+mt19937 rng;
 
-std::queue<pair<int,int>> chunkQueue;
+queue<pair<int,int>> chunkQueue;
 
-std::vector<std::string> playlist = {
+vector<string> playlist = {
     "Assets/sound/minecraft.wav",
     "Assets/sound/c418_subwoofer_lullaby.wav",
     "Assets/sound/mice_on_venus.wav",
@@ -89,7 +94,7 @@ bool PlayMusic(SDL_AudioDeviceID device, const char* file)
 
     if (!SDL_LoadWAV(file, &spec, &buffer, &length))
     {
-        std::cout << "Failed to load WAV: " << SDL_GetError() << std::endl;
+        cout << "Failed to load WAV: " << SDL_GetError() << endl;
         return false;
     }
 
@@ -97,7 +102,7 @@ bool PlayMusic(SDL_AudioDeviceID device, const char* file)
 
     if (!BackGroundMusic)
     {
-        std::cout << "Stream failed: " << SDL_GetError() << std::endl;
+        cout << "Stream failed: " << SDL_GetError() << endl;
         return false;
     }
 
@@ -110,14 +115,14 @@ bool PlayMusic(SDL_AudioDeviceID device, const char* file)
     return true;
 }
 
-bool LoadSong(const std::string& file, SDL_AudioSpec& spec)
+bool LoadSong(const string& file, SDL_AudioSpec& spec)
 {
     if (musicBuffer)
         SDL_free(musicBuffer);
 
     if (!SDL_LoadWAV(file.c_str(), &spec, &musicBuffer, &musicLength))
     {
-        std::cout << "Failed to load: " << SDL_GetError() << std::endl;
+        cout << "Failed to load: " << SDL_GetError() << endl;
         return false;
     }
 
@@ -253,15 +258,55 @@ void createShader() {
     glDeleteShader(fshader);
 }
 
+void createHudShader() {
+    const char* vs = R"(
+    #version 330 core
+    layout(location = 0) in vec2 aPos;
+    layout(location = 1) in vec2 aTex;
+    uniform mat4 uOrtho;
+    out vec2 TexCoord;
+    void main() {
+        gl_Position = uOrtho * vec4(aPos, 0.0, 1.0);
+        TexCoord = aTex;
+    }
+    )";
+
+    const char* fs = R"(
+    #version 330 core
+    in vec2 TexCoord;
+    out vec4 FragColor;
+    uniform sampler2D uTexture;
+    void main() {
+        FragColor = texture(uTexture, TexCoord);
+    }
+    )";
+
+    GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vshader, 1, &vs, nullptr);
+    glCompileShader(vshader);
+
+    GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fshader, 1, &fs, nullptr);
+    glCompileShader(fshader);
+
+    hudShaderProgram = glCreateProgram();
+    glAttachShader(hudShaderProgram, vshader);
+    glAttachShader(hudShaderProgram, fshader);
+    glLinkProgram(hudShaderProgram);
+
+    glDeleteShader(vshader);
+    glDeleteShader(fshader);
+}
+
 // ─── Chunk & Mesh ───────────────────────────────────────────────────────────
 
 struct Vertex { float x,y,z, u,v; };
 
 struct Chunk {
     int cx, cz;
-    std::unordered_map<GLuint, GLuint> vaos;
-    std::unordered_map<GLuint, GLuint> vbos;
-    std::unordered_map<GLuint, GLsizei> counts;
+    unordered_map<GLuint, GLuint> vaos;
+    unordered_map<GLuint, GLuint> vbos;
+    unordered_map<GLuint, GLsizei> counts;
     bool dirty = true;
 
     // Add this constructor
@@ -286,7 +331,7 @@ void buildChunkMesh(Chunk& chunk) {
     chunk.vbos.clear();
     chunk.counts.clear();
 
-    std::unordered_map<GLuint, std::vector<Vertex>> vertexGroups;
+    unordered_map<GLuint, vector<Vertex>> vertexGroups;
 
     for (int lx = 0; lx < 16; ++lx) {
         for (int ly = -30; ly <= 30; ++ly)  {
@@ -396,7 +441,7 @@ void buildChunkMesh(Chunk& chunk) {
 
 class Perlin {
 private:
-    std::vector<int> p;  // permutation table
+    vector<int> p;  // permutation table
 
     float fade(float t) const { return t * t * t * (t * (t * 6 - 15) + 10); }
     float lerp(float t, float a, float b) const { return a + t * (b - a); }
@@ -410,7 +455,7 @@ private:
 public:
     Perlin(unsigned int seed = 0) {
         p.resize(512);
-        std::vector<int> permutation = {
+        vector<int> permutation = {
             151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,
             8,99,37,240,21,10,23,190,6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,
             35,11,32,57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,74,165,71,
@@ -426,8 +471,8 @@ public:
         };
 
         // Shuffle with seed
-        std::mt19937 rng(seed);
-        std::shuffle(permutation.begin(), permutation.end(), rng);
+        mt19937 rng(seed);
+        shuffle(permutation.begin(), permutation.end(), rng);
 
         for (int i = 0; i < 256; ++i) {
             p[256 + i] = p[i] = permutation[i];
@@ -435,11 +480,11 @@ public:
     }
 
     float noise(float x, float y) const {
-        int X = static_cast<int>(std::floor(x)) & 255;
-        int Y = static_cast<int>(std::floor(y)) & 255;
+        int X = static_cast<int>(floor(x)) & 255;
+        int Y = static_cast<int>(floor(y)) & 255;
 
-        x -= std::floor(x);
-        y -= std::floor(y);
+        x -= floor(x);
+        y -= floor(y);
 
         float u = fade(x);
         float v = fade(y);
@@ -476,7 +521,7 @@ public:
 void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
     string key = posKey(x, y, z);
 
-    std::lock_guard<std::mutex> lock(worldBlocksMutex);  // protect map
+    lock_guard<mutex> lock(worldBlocksMutex);  // protect map
 
     if (Overwrite || worldBlocks.count(key) == 0) {
         worldBlocks[key] = type;
@@ -637,7 +682,7 @@ void UpdateChunks() {
 
             if (chunks.find(ckey) == chunks.end()) {
                 // Launch async generation
-            auto _ = std::async(std::launch::async, [cx, cz]() {
+            auto _ = async(launch::async, [cx, cz]() {
                 GenerateChunk(cx, cz);
             });
             }
@@ -734,6 +779,10 @@ int main(int argc, char* argv[]) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
 
+    createShader();
+    createHudShader();
+    glUseProgram(shaderProgram);
+
     // Load textures
     Textures["grass_top.png"] = LoadTexture("grass_top.png");
     Textures["grass.png"]     = LoadTexture("grass.png");
@@ -743,9 +792,52 @@ int main(int argc, char* argv[]) {
     Textures["wood.png"]      = LoadTexture("wood.png");
     Textures["log_top.png"]   = LoadTexture("log_top.png");
     Textures["leaves.png"]    = LoadTexture("leaves.png");
+    Textures["hotbar.png"]    = LoadTexture("hotbar.png");
 
-    createShader();
-    glUseProgram(shaderProgram);
+// Create HUD shader (you already have createHudShader(), good)
+createHudShader();
+
+// Load hotbar texture
+Textures["hotbar.png"] = LoadTexture("hotbar.png");
+GLuint hotbarTex = Textures["hotbar.png"];
+
+// Create hotbar quad VAO/VBO
+float hotbarWidth = 364.0f;   // adjust to your actual hotbar.png width
+float hotbarHeight = 44.0f;
+float scale = 2.0f;           // 2× size looks good on 1280×720
+
+float screenW = 1280.0f;
+float screenH = 720.0f;
+
+float x = (screenW - hotbarWidth * scale) / 2.0f;      // center
+float y = screenH - hotbarHeight * scale - 20.0f;      // near bottom
+
+float vertices[] = {
+    //   x          y         u     v
+    x,             y,         0.0f, 1.0f,   // bottom-left
+    x + hotbarWidth*scale, y,         1.0f, 1.0f,   // bottom-right
+    x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f, // top-right
+
+    x,             y,         0.0f, 1.0f,   // bottom-left
+    x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f, // top-right
+    x,             y + hotbarHeight*scale, 0.0f, 0.0f    // top-left
+};
+
+glGenVertexArrays(1, &hotbarVAO);
+glGenBuffers(1, &hotbarVBO);
+
+glBindVertexArray(hotbarVAO);
+glBindBuffer(GL_ARRAY_BUFFER, hotbarVBO);
+glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+// Position (location 0)
+glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+glEnableVertexAttribArray(0);
+// TexCoord (location 1)
+glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+glEnableVertexAttribArray(1);
+
+glBindVertexArray(0);
 
     GenerateChunk(0, 0);
 
@@ -768,7 +860,7 @@ SDL_ResumeAudioDevice(device);
 
     if (!device)
     {
-        std::cout << "Audio device failed: " << SDL_GetError() << std::endl;
+        cout << "Audio device failed: " << SDL_GetError() << endl;
         return 1;
     }
 
@@ -891,6 +983,38 @@ UpdateChunks();
 {
     PlayNextSong(device, spec);
 }
+// --- Render HUD (hotbar) ---
+glUseProgram(hudShaderProgram);
+
+// Set ortho matrix (bottom-left origin, y up)
+glm::mat4 ortho = glm::ortho(0.0f, 1280.0f, 0.0f, 720.0f, -1.0f, 0.0f);
+glUniformMatrix4fv(glGetUniformLocation(hudShaderProgram, "uOrtho"), 1, GL_FALSE, glm::value_ptr(ortho));
+
+// Disable depth test + write for 2D overlay
+glDisable(GL_DEPTH_TEST);
+glDepthMask(GL_FALSE);
+
+// Enable blending if hotbar has transparency
+glEnable(GL_BLEND);
+glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+// Bind hotbar texture and VAO
+glActiveTexture(GL_TEXTURE0);
+glBindTexture(GL_TEXTURE_2D, hotbarTex);
+glUniform1i(glGetUniformLocation(hudShaderProgram, "uTexture"), 0);
+
+glBindVertexArray(hotbarVAO);
+glDrawArrays(GL_TRIANGLES, 0, 6);
+
+glBindVertexArray(0);
+
+// Restore state for next frame
+glDisable(GL_BLEND);
+glDepthMask(GL_TRUE);
+glEnable(GL_DEPTH_TEST);
+
+// Switch back to world shader
+glUseProgram(shaderProgram);
         SDL_GL_SwapWindow(window);
     }
     SDL_CloseAudioDevice(device);
