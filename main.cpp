@@ -599,17 +599,31 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     }
 
     // Trees...
-    int num_trees = (rng() % 5);
-    for (int i = 0; i < num_trees; ++i) {
-        int tx = cx*16 + (rng() % 16);
-        int tz = cz*16 + (rng() % 16);
+int num_trees = (rng() % 5);
+for (int i = 0; i < num_trees; ++i) {
+    int tx = cx * 16 + (rng() % 16);
+    int tz = cz * 16 + (rng() % 16);
 
-        if (worldBlocks[posKey(tx, 0, tz)] == "grass" || worldBlocks[posKey(tx, 0, tz)] == "dirt") {
-            GenerateTreeBaseAt(tx, 1, tz);
+    // Find the highest solid block that is grass or dirt
+    int surfaceY = -31;  // impossible low value
+
+    for (int y = -30; y <= 30; ++y) {
+        string below = worldBlocks[posKey(tx, y, tz)];
+        if (below == "grass" || below == "dirt") {
+            surfaceY = y;  // update to the highest one
+            break;
         }
     }
 
-    // No buildChunkMesh here — main thread will do it
+    // Only place tree if we found a valid surface (grass or dirt)
+        if (surfaceY >= -30) {
+            // Place trunk starting right above the surface block
+            GenerateTreeBaseAt(tx, surfaceY + 1, tz);
+            cout << "Tree placed at (" << tx << ", " << surfaceY + 1 << ", " << tz << ")" << endl;
+        } else {
+            cout << "No grass/dirt found under tree position (" << tx << ", ?, " << tz << ")" << endl;
+        }
+    }
 }
 
 
