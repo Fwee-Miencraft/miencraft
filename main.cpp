@@ -796,50 +796,44 @@ int main(int argc, char* argv[]) {
     Textures["leaves.png"]    = LoadTexture("leaves.png");
     Textures["hotbar.png"]    = LoadTexture("hotbar.png");
 
-    // Create HUD shader (you already have createHudShader(), good)
     createHudShader();
 
-// Load hotbar texture
-Textures["hotbar.png"] = LoadTexture("hotbar.png");
-GLuint hotbarTex = Textures["hotbar.png"];
+    Textures["hotbar.png"] = LoadTexture("hotbar.png");
+    GLuint hotbarTex = Textures["hotbar.png"];
 
-// Create hotbar quad VAO/VBO
-float hotbarWidth = 364.0f;   // adjust to your actual hotbar.png width
-float hotbarHeight = 44.0f;
-float scale = 2.0f;           // 2× size looks good on 1280×720
+    float hotbarWidth = 364.0f;
+    float hotbarHeight = 44.0f;
+    float scale = 2.0f;
 
-float screenW = 1280.0f;
-float screenH = 720.0f;
+    float screenW = 1280.0f;
+    float screenH = 720.0f;
 
-float x = (screenW - hotbarWidth * scale) / 2.0f;      // center
-float y = screenH - hotbarHeight * scale - 625.0f;      // near bottom
+    float x = (screenW - hotbarWidth * scale) / 2.0f;      // center
+    float y = screenH - hotbarHeight * scale - 625.0f;      // bottom
 
-float vertices[] = {
-    //   x          y         u     v
-    x,             y,         0.0f, 1.0f,   // bottom-left
-    x + hotbarWidth*scale, y,         1.0f, 1.0f,   // bottom-right
-    x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f, // top-right
+    float vertices[] = {
+        x, y, 0.0f, 1.0f,
+        x + hotbarWidth*scale, y, 1.0f, 1.0f,
+        x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f,
 
-    x,             y,         0.0f, 1.0f,   // bottom-left
-    x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f, // top-right
-    x,             y + hotbarHeight*scale, 0.0f, 0.0f    // top-left
-};
+        x, y, 0.0f, 1.0f,
+        x + hotbarWidth*scale, y + hotbarHeight*scale, 1.0f, 0.0f,
+        x, y + hotbarHeight*scale, 0.0f, 0.0f
+    };
 
-glGenVertexArrays(1, &hotbarVAO);
-glGenBuffers(1, &hotbarVBO);
+    glGenVertexArrays(1, &hotbarVAO);
+    glGenBuffers(1, &hotbarVBO);
 
-glBindVertexArray(hotbarVAO);
-glBindBuffer(GL_ARRAY_BUFFER, hotbarVBO);
-glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindVertexArray(hotbarVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, hotbarVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-// Position (location 0)
-glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
-glEnableVertexAttribArray(0);
-// TexCoord (location 1)
-glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
-glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+    glEnableVertexAttribArray(1);
 
-glBindVertexArray(0);
+    glBindVertexArray(0);
 
     GenerateChunk(0, 0);
 
@@ -848,28 +842,36 @@ glBindVertexArray(0);
 
     Uint64 lastTime = SDL_GetPerformanceCounter();
 
-SDL_AudioSpec spec;
-LoadSong(playlist[currentSong], spec);
+    SDL_AudioSpec spec;
+    LoadSong(playlist[currentSong], spec);
 
-BackGroundMusic = SDL_CreateAudioStream(&spec, &spec);
-device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+    BackGroundMusic = SDL_CreateAudioStream(&spec, &spec);
+    device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
 
-SDL_PutAudioStreamData(BackGroundMusic, musicBuffer, musicLength);
-SDL_BindAudioStream(device, BackGroundMusic);
-SDL_ResumeAudioDevice(device);
+    SDL_PutAudioStreamData(BackGroundMusic, musicBuffer, musicLength);
+    SDL_BindAudioStream(device, BackGroundMusic);
+    SDL_ResumeAudioDevice(device);
 
     SDL_ResumeAudioDevice(device);
 
-    if (!device)
-    {
+    if (!device){
         cout << "Audio device failed: " << SDL_GetError() << endl;
         return 1;
     }
-
+    static int frameCounter = 0;
     while (running) {
         Uint64 now = SDL_GetPerformanceCounter();
         double dt = (double)(now - lastTime) / SDL_GetPerformanceFrequency();
         lastTime = now;
+        static Uint64 lastFPSTime = SDL_GetPerformanceCounter();
+        static int frameCount = 0;
+        frameCount++;
+        if (now - lastFPSTime >= SDL_GetPerformanceFrequency()) {
+            double fps = frameCount * (double)SDL_GetPerformanceFrequency() / (now - lastFPSTime);
+            cout <<  "FPS: " << (int)fps << endl;
+            frameCount = 0;
+            lastFPSTime = now;
+        }
 
         breakCooldown -= (float)dt;
         if (breakCooldown < 0.0f) breakCooldown = 0.0f;
@@ -907,7 +909,6 @@ SDL_ResumeAudioDevice(device);
             }
         }
 
-        // Poll mouse button state every frame (backup for event drop)
         float mx, my;
         Uint32 mouseState = SDL_GetMouseState(&mx, &my);
 
@@ -916,7 +917,6 @@ SDL_ResumeAudioDevice(device);
             tryBreakInFront();
         }
 
-        // Old free-fly movement
         const bool* keys = SDL_GetKeyboardState(nullptr);
 
         float rad = glm::radians(yaw);
@@ -939,7 +939,7 @@ SDL_ResumeAudioDevice(device);
         if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
         if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
 
-UpdateChunks();
+        UpdateChunks();
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -964,14 +964,16 @@ UpdateChunks();
         glUseProgram(shaderProgram);
         int rebuiltThisFrame = 0;
         const int MAX_REBUILDS_PER_FRAME = 1;
-
+        frameCounter++;s
         for (auto& pair : chunks) {
             Chunk& chunk = pair.second;
 
             if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
-                if (SDL_rand(2)+1 == 1){
-                    buildChunkMesh(chunk);
-                    rebuiltThisFrame++;
+                if (frameCounter % 2 == 0) {
+                    if (SDL_rand(2)+1 == 1){
+                        buildChunkMesh(chunk);
+                        rebuiltThisFrame++;
+                    }
                 }
             }
 
@@ -983,42 +985,35 @@ UpdateChunks();
                 glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
             }
         }
-        if (SDL_GetAudioStreamQueued(BackGroundMusic) == 0)
-{
-    PlayNextSong(device, spec);
-}
-// --- Render HUD (hotbar) ---
-glUseProgram(hudShaderProgram);
+        if (SDL_GetAudioStreamQueued(BackGroundMusic) == 0){
+            PlayNextSong(device, spec);
+        }
 
-// Set ortho matrix (bottom-left origin, y up)
-glm::mat4 ortho = glm::ortho(0.0f, 1280.0f, 0.0f, 720.0f, -1.0f, 0.0f);
-glUniformMatrix4fv(glGetUniformLocation(hudShaderProgram, "uOrtho"), 1, GL_FALSE, glm::value_ptr(ortho));
+        glUseProgram(hudShaderProgram);
 
-// Disable depth test + write for 2D overlay
-glDisable(GL_DEPTH_TEST);
-glDepthMask(GL_FALSE);
+        glm::mat4 ortho = glm::ortho(0.0f, 1280.0f, 0.0f, 720.0f, -1.0f, 0.0f);
+        glUniformMatrix4fv(glGetUniformLocation(hudShaderProgram, "uOrtho"), 1, GL_FALSE, glm::value_ptr(ortho));
 
-// Enable blending if hotbar has transparency
-glEnable(GL_BLEND);
-glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
 
-// Bind hotbar texture and VAO
-glActiveTexture(GL_TEXTURE0);
-glBindTexture(GL_TEXTURE_2D, hotbarTex);
-glUniform1i(glGetUniformLocation(hudShaderProgram, "uTexture"), 0);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-glBindVertexArray(hotbarVAO);
-glDrawArrays(GL_TRIANGLES, 0, 6);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, hotbarTex);
+        glUniform1i(glGetUniformLocation(hudShaderProgram, "uTexture"), 0);
 
-glBindVertexArray(0);
+        glBindVertexArray(hotbarVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
 
-// Restore state for next frame
-glDisable(GL_BLEND);
-glDepthMask(GL_TRUE);
-glEnable(GL_DEPTH_TEST);
+        glBindVertexArray(0);
 
-// Switch back to world shader
-glUseProgram(shaderProgram);
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+
+        glUseProgram(shaderProgram);
         SDL_GL_SwapWindow(window);
     }
     SDL_CloseAudioDevice(device);
