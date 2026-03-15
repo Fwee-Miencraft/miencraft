@@ -15,10 +15,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 
-// GLAD – must be included before any OpenGL calls
 #include "glad/glad.h"
 
-// GLM for matrices and vectors
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -964,7 +962,7 @@ int main(int argc, char* argv[]) {
         glUseProgram(shaderProgram);
         int rebuiltThisFrame = 0;
         const int MAX_REBUILDS_PER_FRAME = 1;
-        frameCounter++;s
+        frameCounter++;
         for (auto& pair : chunks) {
             Chunk& chunk = pair.second;
 
