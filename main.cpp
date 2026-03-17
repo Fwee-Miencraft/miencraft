@@ -740,7 +740,36 @@ void tryBreakInFront() {
     breakCooldown = BREAK_COOLDOWN_TIME / 2;
 }
 
+void cleanupAllChunks() {
+    for (auto& [ckey, chunk] : chunks) {
+        for (auto& p : chunk.vaos) {
+            if (p.second != 0) glDeleteVertexArrays(1, &p.second);
+        }
+        for (auto& p : chunk.vbos) {
+            if (p.second != 0) glDeleteBuffers(1, &p.second);
+        }
+        chunk.vaos.clear();
+        chunk.vbos.clear();
+        chunk.counts.clear();
+    }
+    chunks.clear();
 
+    // Also clean up hotbar
+    if (hotbarVAO != 0) glDeleteVertexArrays(1, &hotbarVAO);
+    if (hotbarVBO != 0) glDeleteBuffers(1, &hotbarVBO);
+    hotbarVAO = 0;
+    hotbarVBO = 0;
+
+    // Delete all textures
+    for (auto& [name, tex] : Textures) {
+        if (tex != 0) glDeleteTextures(1, &tex);
+    }
+    Textures.clear();
+
+    // Delete shaders
+    if (shaderProgram != 0) glDeleteProgram(shaderProgram);
+    if (hudShaderProgram != 0) glDeleteProgram(hudShaderProgram);
+}
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 
@@ -1014,6 +1043,7 @@ int main(int argc, char* argv[]) {
         glUseProgram(shaderProgram);
         SDL_GL_SwapWindow(window);
     }
+    cleanupAllChunks();
     SDL_CloseAudioDevice(device);
     SDL_DestroyWindow(window);
     SDL_Quit();
