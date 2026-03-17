@@ -1044,6 +1044,14 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(window);
     }
     cleanupAllChunks();
+    for (auto& pair : Textures){
+        GLuint textID = pair.second;
+        if (textID != 0){
+            glDeleteTextures(1, &textID);
+        }
+    }
+    if (shaderProgram != 0)    glDeleteProgram(shaderProgram);
+    if (hudShaderProgram != 0) glDeleteProgram(hudShaderProgram);
     SDL_CloseAudioDevice(device);
     SDL_DestroyWindow(window);
     SDL_Quit();
