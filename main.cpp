@@ -1043,15 +1043,36 @@ int main(int argc, char* argv[]) {
         glUseProgram(shaderProgram);
         SDL_GL_SwapWindow(window);
     }
+
     cleanupAllChunks();
-    for (auto& pair : Textures){
-        GLuint textID = pair.second;
-        if (textID != 0){
-            glDeleteTextures(1, &textID);
+    for (auto& pair : Textures) {
+        GLuint texID = pair.second;
+        if (texID != 0) {
+            glDeleteTextures(1, &texID);
         }
     }
+    Textures.clear();
+
     if (shaderProgram != 0)    glDeleteProgram(shaderProgram);
     if (hudShaderProgram != 0) glDeleteProgram(hudShaderProgram);
+
+    if (BackGroundMusic) {
+        SDL_DestroyAudioStream(BackGroundMusic);
+        BackGroundMusic = nullptr;
+    }
+    if (musicBuffer) {
+        SDL_free(musicBuffer);
+        musicBuffer = nullptr;
+        musicLength = 0;
+    }
+    if (device != 0) {
+        SDL_CloseAudioDevice(device);
+        device = 0;
+    }
+
+    worldBlocks.clear();
+
+    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
     SDL_CloseAudioDevice(device);
     SDL_DestroyWindow(window);
     SDL_Quit();
