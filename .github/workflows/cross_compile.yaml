@@ -2,15 +2,16 @@ name: Build All Platforms
 
 on:
   push:
-    branches: ["main"] # Only runs when you push code, not when the bot pushes builds
+    branches: ["main"]
 
 jobs:
-  # 1. WINDOWS
+  # 🪟 WINDOWS (x64)
   build-windows:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup MinGW
         run: choco install mingw
 
@@ -18,64 +19,107 @@ jobs:
         run: |
           g++ -std=c++17 main.cpp glad/src/glad.cpp -o main.exe -Iglad/include -I. -lSDL3 -lSDL3_image -lopengl32 -static-libgcc -static-libstdc++
 
-      - name: Push to Build Branch
+      - name: Prepare artifact
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          mkdir -p out/windows-x64
-          move main.exe out/windows-x64/
-          git fetch origin build || git checkout -b build
-          git checkout build
-          # Merge main into build to keep folder structure, or just copy files
-          cp -r out/* . 
-          git add .
-          git commit -m "Update Windows Build" || echo "No changes"
-          git push origin build
+          mkdir out
+          mkdir out\windows-x64
+          move main.exe out\windows-x64\
 
-  # 2. LINUX (Waits for Windows)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: out/windows-x64/
+
+  # 🐧 LINUX (x64)
   build-linux:
-    needs: build-windows
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Install deps
-        run: sudo apt update && sudo apt install -y build-essential libsdl3-dev libsdl3-image-dev libgl1-mesa-dev
-      
-      - name: Build
-        run: g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -lGL
-
-      - name: Push to Build Branch
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git fetch origin build
-          git checkout build
-          mkdir -p linux-x64
-          mv main linux-x64/
-          git add .
-          git commit -m "Update Linux Build" || echo "No changes"
-          git push origin build
+          sudo apt update
+          sudo apt install -y build-essential libsdl3-dev libsdl3-image-dev libgl1-mesa-dev
 
-  # 3. MACOS (Waits for Linux)
+      - name: Build
+        run: |
+          g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -lGL
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p out/linux-x64
+          mv main out/linux-x64/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: out/linux-x64/
+
+  # 🍎 MACOS (ARM)
   build-macos:
-    needs: build-linux
     runs-on: macos-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: Install deps
-        run: brew install sdl3 sdl3_image
-      
-      - name: Build
-        run: g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -framework OpenGL
 
-      - name: Push to Build Branch
+      - name: Install deps
+        run: |
+          brew install sdl3 sdl3_image
+
+      - name: Build
+        run: |
+          g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -framework OpenGL
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p out/macos-arm
+          mv main out/macos-arm/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm
+          path: out/macos-arm/
+
+  # 📦 FINAL JOB: COMBINE + PUSH
+  combine-and-push:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download all artifacts into build/
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build/
+
+      # Now structure will be:
+      # build/windows-x64/
+      # build/linux-x64/
+      # build/macos-arm/
+
+      - name: Push clean build branch
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git fetch origin build
-          git checkout build
-          mkdir -p macos-arm
-          mv main macos-arm/
+
+          # Create clean branch
+          git checkout --orphan build
+
+          # Remove everything
+          git rm -rf . > /dev/null 2>&1 || true
+
+          # Move build folder into repo root
+          mv build/* .
+
+          # Add only build outputs
           git add .
-          git commit -m "Update macOS Build" || echo "No changes"
-          git push origin build
+
+          git commit -m "Update builds"
+
+          git push origin build --force
