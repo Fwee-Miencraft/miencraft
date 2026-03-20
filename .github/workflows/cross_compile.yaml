@@ -1,0 +1,81 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: ["main"] # Only runs when you push code, not when the bot pushes builds
+
+jobs:
+  # 1. WINDOWS
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup MinGW
+        run: choco install mingw
+
+      - name: Build
+        run: |
+          g++ -std=c++17 main.cpp glad/src/glad.cpp -o main.exe -Iglad/include -I. -lSDL3 -lSDL3_image -lopengl32 -static-libgcc -static-libstdc++
+
+      - name: Push to Build Branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          mkdir -p out/windows-x64
+          move main.exe out/windows-x64/
+          git fetch origin build || git checkout -b build
+          git checkout build
+          # Merge main into build to keep folder structure, or just copy files
+          cp -r out/* . 
+          git add .
+          git commit -m "Update Windows Build" || echo "No changes"
+          git push origin build
+
+  # 2. LINUX (Waits for Windows)
+  build-linux:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt update && sudo apt install -y build-essential libsdl3-dev libsdl3-image-dev libgl1-mesa-dev
+      
+      - name: Build
+        run: g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -lGL
+
+      - name: Push to Build Branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git fetch origin build
+          git checkout build
+          mkdir -p linux-x64
+          mv main linux-x64/
+          git add .
+          git commit -m "Update Linux Build" || echo "No changes"
+          git push origin build
+
+  # 3. MACOS (Waits for Linux)
+  build-macos:
+    needs: build-linux
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: brew install sdl3 sdl3_image
+      
+      - name: Build
+        run: g++ -std=c++17 main.cpp glad/src/glad.cpp -o main -Iglad/include -I. -lSDL3 -lSDL3_image -framework OpenGL
+
+      - name: Push to Build Branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git fetch origin build
+          git checkout build
+          mkdir -p macos-arm
+          mv main macos-arm/
+          git add .
+          git commit -m "Update macOS Build" || echo "No changes"
+          git push origin build
