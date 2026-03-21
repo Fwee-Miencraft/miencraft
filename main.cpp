@@ -794,6 +794,7 @@ int main(int argc, char* argv[]) {
     }
 
     SDL_GL_CreateContext(window);
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
 
     if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
         cout << "GLAD failed\n";
@@ -1077,6 +1078,7 @@ int main(int argc, char* argv[]) {
     }
 
     worldBlocks.clear();
+    cout << "Exited game" << endl;
 
     SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
     SDL_CloseAudioDevice(device);
