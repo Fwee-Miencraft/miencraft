@@ -25,19 +25,6 @@ using namespace std;
 
 // ─── Globals ────────────────────────────────────────────────────────────────
 
-float playerX = 0.0f;
-float playerY = 10.0f;
-float playerZ = 5.0f;
-
-float yaw   = -90.0f;   // starts looking along -Z
-float pitch = 0.0f;
-
-float speed = 10.0f;
-float mouseSensitivity = 0.15f;
-
-float breakCooldown = 0.0f;
-const float BREAK_COOLDOWN_TIME = 0.3f;  // seconds
-
 GLuint hudShaderProgram = 0;
 GLuint hotbarVAO = 0;
 GLuint hotbarVBO = 0;
@@ -86,6 +73,163 @@ SDL_AudioDeviceID device;
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
+
+string posKey(int x, int y, int z) {
+    return to_string(x) + "_" + to_string(y) + "_" + to_string(z);
+}
+
+struct AABB {
+    glm::vec3 min;
+    glm::vec3 max;
+
+    AABB(const glm::vec3& pos, float width = 0.6f, float height = 1.8f) {
+        min = pos - glm::vec3(width/2, 0, width/2);
+        max = pos + glm::vec3(width/2, height, width/2);
+    }
+};
+
+class Player {
+public:
+    glm::vec3 position;
+    glm::vec3 velocity;
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+    float moveSpeed = 10.0f;
+    float jumpStrength = 12.0f;
+    float breakCooldown = 0.0f;
+    const float BREAK_COOLDOWN_TIME = 0.3f;
+    bool onGround = false;
+
+    // Gravity constants
+    static constexpr float GRAVITY = -32.0f;         // m/s²
+    static constexpr float TERMINAL_VELOCITY = -50.0f;
+
+    Player(float x = 0.0f, float y = 10.0f, float z = 5.0f)
+        : position(x, y, z), velocity(0.0f)
+    {}
+
+    glm::vec3 getLookDirection() const {
+        float radYaw   = glm::radians(yaw);
+        float radPitch = glm::radians(pitch);
+        return glm::normalize(glm::vec3(
+            cos(radYaw) * cos(radPitch),
+            sin(radPitch),
+            sin(radYaw) * cos(radPitch)
+        ));
+    }
+
+    void updateLook(float xrel, float yrel) {
+        yaw   += xrel * 0.15f;
+        pitch -= yrel * 0.15f;
+        pitch = glm::clamp(pitch, -89.0f, 89.0f);
+    }
+
+    void applyInput(float dt) {
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+
+        float rad = glm::radians(yaw);
+        glm::vec3 forward(cos(rad), 0.0f, sin(rad));
+        forward = glm::normalize(forward);
+        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
+
+        glm::vec3 moveDir(0.0f);
+
+        if (keys[SDL_SCANCODE_W]) moveDir += forward;
+        if (keys[SDL_SCANCODE_S]) moveDir -= forward;
+        if (keys[SDL_SCANCODE_A]) moveDir -= right;
+        if (keys[SDL_SCANCODE_D]) moveDir += right;
+
+        if (glm::length(moveDir) > 0.001f) {
+            moveDir = glm::normalize(moveDir);
+        }
+
+        velocity.x = moveDir.x * moveSpeed;
+        velocity.z = moveDir.z * moveSpeed;
+
+        // Jump only when on ground
+        if (keys[SDL_SCANCODE_SPACE] && onGround) {
+            velocity.y = jumpStrength;
+            onGround = false;
+        }
+    }
+
+    void applyGravity(float dt) {
+        if (!onGround) {
+            velocity.y += GRAVITY * dt;
+            velocity.y = std::max(velocity.y, TERMINAL_VELOCITY);
+        }
+    }
+
+    void moveAndCollide(float dt) {
+        // Proposed new position
+        onGround = false;
+        glm::vec3 newPos = position + velocity * dt;
+
+        // Create player bounding box at new position
+        AABB newBox(newPos);
+
+        bool collided = false;
+
+        // Check nearby blocks (simple 3x4x3 grid around player)
+        int minX = floor(newPos.x - 1.0f);
+        int maxX = ceil(newPos.x + 1.0f);
+        int minY = floor(newPos.y - 1.0f);
+        int maxY = ceil(newPos.y + 2.0f);
+        int minZ = floor(newPos.z - 1.0f);
+        int maxZ = ceil(newPos.z + 1.0f);
+
+        for (int bx = minX; bx <= maxX; ++bx) {
+            for (int by = minY; by <= maxY; ++by) {
+                for (int bz = minZ; bz <= maxZ; ++bz) {
+                    string key = posKey(bx, by, bz);
+                    auto it = ::worldBlocks.find(key);
+                    if (it == worldBlocks.end() || it->second == "air") continue;
+
+                    // Block bounding box (1x1x1)
+                    AABB blockBox(glm::vec3(bx + 0.5f, by + 0.5f, bz + 0.5f), 1.0f, 1.0f);
+
+                    // Simple AABB overlap check
+                    if (newBox.max.x > blockBox.min.x && newBox.min.x < blockBox.max.x &&
+                        newBox.max.y > blockBox.min.y && newBox.min.y < blockBox.max.y &&
+                        newBox.max.z > blockBox.min.z && newBox.min.z < blockBox.max.z) {
+                        collided = true;
+                        onGround = true;
+
+                        // Snap to top of block if falling (simple ground detection)
+                        if (velocity.y < 0 && position.y > by + 1.0f) {
+                            newPos.y = by + 1.0f + 0.001f;  // slight offset to avoid sticking
+                            velocity.y = 0.0f;
+                            onGround = true;
+                        }
+                        // Basic wall push-back (very simple — can improve later)
+                        else {
+                            glm::vec3 penetration = glm::vec3(0);
+                            penetration.x = std::min(newBox.max.x - blockBox.min.x, blockBox.max.x - newBox.min.x);
+                            penetration.z = std::min(newBox.max.z - blockBox.min.z, blockBox.max.z - newBox.min.z);
+                            // Choose smallest penetration axis to push out
+                            if (std::abs(penetration.x) < std::abs(penetration.z)) {
+                                if (newPos.x > bx + 0.5f) newPos.x += penetration.x;
+                                else newPos.x -= penetration.x;
+                            } else {
+                                if (newPos.z > bz + 0.5f) newPos.z += penetration.z;
+                                else newPos.z -= penetration.z;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        position = newPos;
+
+        // If no collision downward and not on ground, apply gravity
+        if (!collided && !onGround && velocity.y < 0) {
+            onGround = false;
+        }
+    }
+};
+
+Player player(0.0f, 100.0f, 5.0f);
 
 bool PlayMusic(SDL_AudioDeviceID device, const char* file)
 {
@@ -144,10 +288,6 @@ bool PlayNextSong(SDL_AudioDeviceID device, SDL_AudioSpec& spec)
     SDL_PutAudioStreamData(BackGroundMusic, musicBuffer, musicLength);
 
     return true;
-}
-
-string posKey(int x, int y, int z) {
-    return to_string(x) + "_" + to_string(y) + "_" + to_string(z);
 }
 
 bool isSolid(int x, int y, int z) {
@@ -669,8 +809,8 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
 
 
 void UpdateChunks() {
-    int px = floor(playerX / 16.0f);
-    int pz = floor(playerZ / 16.0f);
+    int px = floor(player.position.x / 16.0f);
+    int pz = floor(player.position.z / 16.0f);
 
     const int LOAD_RADIUS = 4;
 
@@ -692,24 +832,15 @@ void UpdateChunks() {
 }
 
 void tryBreakInFront() {
-    if (breakCooldown > 0.0f) {
-        cout << "Break on cooldown (" << breakCooldown << "s left)" << endl;
+    if (player.breakCooldown > 0.0f) {
+        cout << "Break on cooldown (" << player.breakCooldown << "s left)" << endl;
         return;
     }
 
     cout << "Trying to break block in front" << endl;
 
-    // Look direction
-    float radYaw   = glm::radians(yaw);
-    float radPitch = glm::radians(pitch);
-    glm::vec3 dir(
-        cos(radYaw) * cos(radPitch),
-        sin(radPitch),
-        sin(radYaw) * cos(radPitch)
-    );
-    dir = glm::normalize(dir);
-
-    glm::vec3 start(playerX, playerY, playerZ);
+    glm::vec3 dir = player.getLookDirection();
+    glm::vec3 start = player.position;
 
     for (int step = 1; step <= 5; ++step) {
         glm::vec3 pos = start + dir * (float)step;
@@ -733,13 +864,13 @@ void tryBreakInFront() {
                     }
                 }
             }
-            breakCooldown = BREAK_COOLDOWN_TIME;
+            player.breakCooldown = player.BREAK_COOLDOWN_TIME;
             return;
         }
     }
 
     cout << "No breakable block in front" << endl;
-    breakCooldown = BREAK_COOLDOWN_TIME / 2;
+    player.breakCooldown = player.BREAK_COOLDOWN_TIME / 2;
 }
 
 void cleanupAllChunks() {
@@ -903,15 +1034,16 @@ int main(int argc, char* argv[]) {
             lastFPSTime = now;
         }
 
-        breakCooldown -= (float)dt;
-        if (breakCooldown < 0.0f) breakCooldown = 0.0f;
-
         // Event loop
         while (SDL_PollEvent(&e)) {
 
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
                 runningThreads.store(false);  // signal threads to stop early
+            }
+
+            if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                player.updateLook(e.motion.xrel, e.motion.yrel);
             }
 
             if (e.type == SDL_EVENT_KEY_DOWN) {
@@ -927,13 +1059,6 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (e.type == SDL_EVENT_MOUSE_MOTION) {
-                yaw   += e.motion.xrel * mouseSensitivity;
-                pitch -= e.motion.yrel * mouseSensitivity;
-                if (pitch > 89.0f) pitch = 89.0f;
-                if (pitch < -89.0f) pitch = -89.0f;
-            }
-
             if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 cout << "[MOUSE DOWN] Button: " << (int)e.button.button << endl;
                 if (e.button.button == SDL_BUTTON_LEFT) {
@@ -942,56 +1067,24 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        // Input handling
+        player.applyInput(dt);
 
-        float mx, my;
-        Uint32 mouseState = SDL_GetMouseState(&mx, &my);
-
-        if ((mouseState & SDL_BUTTON_LMASK) && breakCooldown <= 0.0f) {
-            cout << "Mouse held - breaking" << endl;
-            tryBreakInFront();
-        }
-
-        const bool* keys = SDL_GetKeyboardState(nullptr);
-
-        float rad = glm::radians(yaw);
-        glm::vec3 forward(cos(rad), 0.0f, sin(rad));
-        forward = glm::normalize(forward);
-        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
-
-        glm::vec3 moveDir(0.0f);
-
-        if (keys[SDL_SCANCODE_W]) moveDir += forward;
-        if (keys[SDL_SCANCODE_S]) moveDir -= forward;
-        if (keys[SDL_SCANCODE_A]) moveDir -= right;
-        if (keys[SDL_SCANCODE_D]) moveDir += right;
-
-        moveDir *= speed * (float)dt;
-
-        playerX += moveDir.x;
-        playerZ += moveDir.z;
-
-        if (keys[SDL_SCANCODE_SPACE]) playerY += speed * (float)dt;
-        if (keys[SDL_SCANCODE_LSHIFT]) playerY -= speed * (float)dt;
-
+        // Physics + collision
+        player.applyGravity(dt);
+        player.moveAndCollide(dt);
         UpdateChunks();
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1280.0f / 720.0f, 0.1f, 200.0f);
-
-        glm::vec3 direction(
-            cos(glm::radians(yaw)) * cos(glm::radians(pitch)),
-            sin(glm::radians(pitch)),
-            sin(glm::radians(yaw)) * cos(glm::radians(pitch))
-        );
-
         glm::mat4 view = glm::lookAt(
-            glm::vec3(playerX, playerY, playerZ),
-            glm::vec3(playerX, playerY, playerZ) + direction,
+            player.position,
+            player.position + player.getLookDirection(),
             glm::vec3(0,1,0)
         );
 
+        glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1280.0f / 720.0f, 0.1f, 200.0f);
         glm::mat4 mvp = proj * view;
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
@@ -1078,11 +1171,14 @@ int main(int argc, char* argv[]) {
     }
 
     worldBlocks.clear();
-    cout << "Exited game" << endl;
-
-    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
+    cout << "Cleared world blocks" << endl;
     SDL_CloseAudioDevice(device);
+    cout << "Closed audio" << endl;
+    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
+    cout << "quit the SDL Subsystem with Audio and video" << endl;
     SDL_DestroyWindow(window);
+    cout << "destoryed window" << endl;
     SDL_Quit();
+    cout << "Quit SDL" << endl;
     return 0;
 }
