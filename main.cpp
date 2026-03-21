@@ -45,6 +45,7 @@ GLint hotbarTextureID = 0;
 
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
+std::atomic<bool> runningThreads{true};
 mutex worldBlocksMutex;
 SDL_AudioStream* BackGroundMusic = nullptr;
 Uint8* musicBuffer = nullptr;
@@ -681,7 +682,8 @@ void UpdateChunks() {
 
             if (chunks.find(ckey) == chunks.end()) {
                 // Launch async generation
-            auto _ = async(launch::async, [cx, cz]() {
+            auto fut = std::async(std::launch::async, [cx, cz]() {
+            if (!runningThreads.load()) return;
                 GenerateChunk(cx, cz);
             });
             }
@@ -908,10 +910,14 @@ int main(int argc, char* argv[]) {
 
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
+                runningThreads.store(false);  // signal threads to stop early
             }
 
             if (e.type == SDL_EVENT_KEY_DOWN) {
-                if (e.key.key == SDLK_ESCAPE) running = false;
+                if (e.key.key == SDLK_ESCAPE){
+                    running = false;
+                    runningThreads.store(false);  // signal threads to stop early
+                }
 
                 // Break on E
                 if (e.key.key == SDLK_E) {
