@@ -1078,11 +1078,14 @@ int main(int argc, char* argv[]) {
     }
 
     worldBlocks.clear();
-    cout << "Exited game" << endl;
-
-    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
+    cout << "Cleared world blocks" << endl;
     SDL_CloseAudioDevice(device);
+    cout << "Closed audio" << endl;
+    SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
+    cout << "quit the SDL Subsystem with Audio and video" << endl;
     SDL_DestroyWindow(window);
+    cout << "destoryed window" << endl;
     SDL_Quit();
+    cout << "Quit SDL" << endl;
     return 0;
 }
