@@ -787,13 +787,6 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
-uint64_t hash_coords(int x, int z, uint64_t seed = 123456789ULL) {
-    uint64_t h = seed;
-    h ^= static_cast<uint64_t>(x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= static_cast<uint64_t>(z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    return h;
-}
-
 void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     string ckey = chunkKey(cx, cz);
 
