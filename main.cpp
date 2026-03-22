@@ -185,34 +185,30 @@ public:
                     auto it = ::worldBlocks.find(key);
                     if (it == worldBlocks.end() || it->second == "air") continue;
 
-                    // Block bounding box (1x1x1)
                     AABB blockBox(glm::vec3(bx + 0.5f, by + 0.5f, bz + 0.5f), 1.0f, 1.0f);
 
-                    // Simple AABB overlap check
                     if (newBox.max.x > blockBox.min.x && newBox.min.x < blockBox.max.x &&
                         newBox.max.y > blockBox.min.y && newBox.min.y < blockBox.max.y &&
                         newBox.max.z > blockBox.min.z && newBox.min.z < blockBox.max.z) {
                         collided = true;
                         onGround = true;
 
-                        // Snap to top of block if falling (simple ground detection)
                         if (velocity.y < 0 && position.y > by + 1.0f) {
-                            newPos.y = by + 1.0f + 0.001f;  // slight offset to avoid sticking
+                            newPos.y = by + 1.0f + 0.001f;
                             velocity.y = 0.0f;
                             onGround = true;
-                        }
-                        // Basic wall push-back (very simple — can improve later)
-                        else {
+                        } else {
                             glm::vec3 penetration = glm::vec3(0);
                             penetration.x = std::min(newBox.max.x - blockBox.min.x, blockBox.max.x - newBox.min.x);
                             penetration.z = std::min(newBox.max.z - blockBox.min.z, blockBox.max.z - newBox.min.z);
-                            // Choose smallest penetration axis to push out
-                            if (std::abs(penetration.x) < std::abs(penetration.z)) {
-                                if (newPos.x > bx + 0.5f) newPos.x += penetration.x;
-                                else newPos.x -= penetration.x;
-                            } else {
-                                if (newPos.z > bz + 0.5f) newPos.z += penetration.z;
-                                else newPos.z -= penetration.z;
+                            if (velocity.x != 0 && velocity.y != 0){
+                                if (std::abs(penetration.x) < std::abs(penetration.z)) {
+                                    if (newPos.x > bx + 0.5f) newPos.x += penetration.x;
+                                    else newPos.x -= penetration.x;
+                                } else {
+                                    if (newPos.z > bz + 0.5f) newPos.z += penetration.z;
+                                    else newPos.z -= penetration.z;
+                                }
                             }
                         }
                     }
