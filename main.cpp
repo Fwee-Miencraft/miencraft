@@ -94,8 +94,8 @@ public:
     glm::vec3 velocity;
     float yaw = -90.0f;
     float pitch = 0.0f;
-    float moveSpeed = 10.0f;
-    float jumpStrength = 12.0f;
+    float moveSpeed = 5.0f;
+    float jumpStrength = 8.0f;
     float breakCooldown = 0.0f;
     const float BREAK_COOLDOWN_TIME = 0.3f;
     bool onGround = false;
@@ -161,16 +161,13 @@ public:
     }
 
     void moveAndCollide(float dt) {
-        // Proposed new position
         onGround = false;
         glm::vec3 newPos = position + velocity * dt;
 
-        // Create player bounding box at new position
         AABB newBox(newPos);
 
         bool collided = false;
 
-        // Check nearby blocks (simple 3x4x3 grid around player)
         int minX = floor(newPos.x - 1.0f);
         int maxX = ceil(newPos.x + 1.0f);
         int minY = floor(newPos.y - 1.0f);
@@ -201,7 +198,7 @@ public:
                             glm::vec3 penetration = glm::vec3(0);
                             penetration.x = std::min(newBox.max.x - blockBox.min.x, blockBox.max.x - newBox.min.x);
                             penetration.z = std::min(newBox.max.z - blockBox.min.z, blockBox.max.z - newBox.min.z);
-                            if (velocity.x != 0 && velocity.y != 0){
+                            if (velocity.x != 0 || velocity.z != 0 && velocity.y == 0 && 1 == 0){
                                 if (std::abs(penetration.x) < std::abs(penetration.z)) {
                                     if (newPos.x > bx + 0.5f) newPos.x += penetration.x;
                                     else newPos.x -= penetration.x;
@@ -217,8 +214,6 @@ public:
         }
 
         position = newPos;
-
-        // If no collision downward and not on ground, apply gravity
         if (!collided && !onGround && velocity.y < 0) {
             onGround = false;
         }
@@ -1073,11 +1068,11 @@ int main(int argc, char* argv[]) {
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
+        glm::vec3 PlayerCamPos(player.position.x, player.position.y + 1, player.position.z);
         glm::mat4 view = glm::lookAt(
-            player.position,
-            player.position + player.getLookDirection(),
-            glm::vec3(0,1,0)
+            PlayerCamPos,
+            PlayerCamPos + player.getLookDirection(),
+            glm::vec3(0, 1,0)
         );
 
         glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1280.0f / 720.0f, 0.1f, 200.0f);
