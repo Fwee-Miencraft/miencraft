@@ -86,14 +86,148 @@ struct AABB {
         min = pos - glm::vec3(width/2, 0, width/2);
         max = pos + glm::vec3(width/2, height, width/2);
     }
+};
 
-    // Add this method — checks if two AABBs overlap
-    bool intersects(const AABB& other) const {
-        return (min.x <= other.max.x && max.x >= other.min.x) &&
-               (min.y <= other.max.y && max.y >= other.min.y) &&
-               (min.z <= other.max.z && max.z >= other.min.z);
+class Player {
+public:
+    glm::vec3 position;
+    glm::vec3 velocity;
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+    float moveSpeed = 10.0f;
+    float jumpStrength = 12.0f;
+    float breakCooldown = 0.0f;
+    const float BREAK_COOLDOWN_TIME = 0.3f;
+    bool onGround = false;
+
+    // Gravity constants
+    static constexpr float GRAVITY = 0.0f;         // m/s²
+    static constexpr float TERMINAL_VELOCITY = -50.0f;
+
+    Player(float x = 0.0f, float y = 10.0f, float z = 5.0f)
+        : position(x, y, z), velocity(0.0f)
+    {}
+
+    glm::vec3 getLookDirection() const {
+        float radYaw   = glm::radians(yaw);
+        float radPitch = glm::radians(pitch);
+        return glm::normalize(glm::vec3(
+            cos(radYaw) * cos(radPitch),
+            sin(radPitch),
+            sin(radYaw) * cos(radPitch)
+        ));
+    }
+
+    void updateLook(float xrel, float yrel) {
+        yaw   += xrel * 0.15f;
+        pitch -= yrel * 0.15f;
+        pitch = glm::clamp(pitch, -89.0f, 89.0f);
+    }
+
+    void applyInput(float dt) {
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+
+        float rad = glm::radians(yaw);
+        glm::vec3 forward(cos(rad), 0.0f, sin(rad));
+        forward = glm::normalize(forward);
+        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
+
+        glm::vec3 moveDir(0.0f);
+
+        if (keys[SDL_SCANCODE_W]) moveDir += forward;
+        if (keys[SDL_SCANCODE_S]) moveDir -= forward;
+        if (keys[SDL_SCANCODE_A]) moveDir -= right;
+        if (keys[SDL_SCANCODE_D]) moveDir += right;
+        if (keys[SDL_SCANCODE_LSHIFT]) velocity.y = -jumpStrength;
+
+        if (glm::length(moveDir) > 0.001f) {
+            moveDir = glm::normalize(moveDir);
+        }
+
+        velocity.x = moveDir.x * moveSpeed;
+        velocity.z = moveDir.z * moveSpeed;
+
+        
+        if (keys[SDL_SCANCODE_SPACE]) {
+            velocity.y = jumpStrength;
+            onGround = false;
+        }
+        velocity.y *= 0.8;
+    }
+
+    void applyGravity(float dt) {
+        if (!onGround) {
+            velocity.y += GRAVITY * dt;
+            velocity.y = std::max(velocity.y, TERMINAL_VELOCITY);
+        }
+    }
+
+    void moveAndCollide(float dt) {
+        
+        // Proposed new position
+        onGround = false;
+        glm::vec3 newPos = position + velocity * dt;
+
+        // Create player bounding box at new position
+        AABB newBox(newPos);
+
+        bool collided = false;
+
+        // Check nearby blocks (simple 3x4x3 grid around player)
+        int minX = floor(newPos.x - 1.0f);
+        int maxX = ceil(newPos.x + 1.0f);
+        int minY = floor(newPos.y - 1.0f);
+        int maxY = ceil(newPos.y + 2.0f);
+        int minZ = floor(newPos.z - 1.0f);
+        int maxZ = ceil(newPos.z + 1.0f);
+
+        for (int bx = minX; bx <= maxX; ++bx) {
+            for (int by = minY; by <= maxY; ++by) {
+                for (int bz = minZ; bz <= maxZ; ++bz) {
+                    string key = posKey(bx, by, bz);
+                    auto it = ::worldBlocks.find(key);
+                    if (it == worldBlocks.end() || it->second == "air") continue;
+
+                    AABB blockBox(glm::vec3(0.0f, 0.0f, 0.0f), 0.0f, 0.0f);
+
+                    if (newBox.max.x > blockBox.min.x && newBox.min.x < blockBox.max.x &&
+                        newBox.max.y > blockBox.min.y && newBox.min.y < blockBox.max.y &&
+                        newBox.max.z > blockBox.min.z && newBox.min.z < blockBox.max.z) {
+                        collided = true;
+                        onGround = true;
+
+                        if (velocity.y < 0 && position.y > by + 1.0f) {
+                            newPos.y = by + 1.0f + 0.001f;
+                            velocity.y = 0.0f;
+                            onGround = true;
+                        }
+                        else {
+                            glm::vec3 penetration = glm::vec3(0);
+                            penetration.x = std::min(newBox.max.x - blockBox.min.x, blockBox.max.x - newBox.min.x);
+                            penetration.z = std::min(newBox.max.z - blockBox.min.z, blockBox.max.z - newBox.min.z);
+                            if (std::abs(penetration.x) < std::abs(penetration.z)) {
+                                if (newPos.x > bx + 0.5f) newPos.x += penetration.x;
+                                else newPos.x -= penetration.x;
+                            } else {
+                                if (newPos.z > bz + 0.5f) newPos.z += penetration.z;
+                                else newPos.z -= penetration.z;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        position = newPos;
+
+        // If no collision downward and not on ground, apply gravity
+        if (!collided && !onGround && velocity.y < 0) {
+            onGround = false;
+        }
     }
 };
+
+Player player(0.0f, 50.0f, 5.0f);
 
 bool PlayMusic(SDL_AudioDeviceID device, const char* file)
 {
@@ -187,184 +321,6 @@ tuple<string,string,string> Find_tuple(const string& name) {
     cout << "Index not found for " << name << " (value=" << target << ")" << endl;
     return {"grass_top.png", "grass.png", "dirt.png"};
 }
-
-class Player {
-public:
-    glm::vec3 position;
-    glm::vec3 velocity;
-    float yaw = -90.0f;
-    float pitch = 0.0f;
-    float moveSpeed = 5.0f;
-    float jumpStrength = 8.0f;
-    float breakCooldown = 0.0f;
-    const float BREAK_COOLDOWN_TIME = 0.3f;
-    bool onGround = false;
-
-    // Gravity constants
-    static constexpr float GRAVITY = -32.0f;
-    static constexpr float TERMINAL_VELOCITY = -50.0f;
-
-    // Two hitboxes
-    static constexpr float VERTICAL_WIDTH  = 0.55f;   // narrow for up/down
-    static constexpr float VERTICAL_HEIGHT = 1.85f;   // tall (feet to head)
-    static constexpr float HORIZONTAL_WIDTH  = 0.85f; // wider for sides
-    static constexpr float HORIZONTAL_HEIGHT = 1.2f;  // shorter (waist to head)
-
-    Player(float x = 0.0f, float y = 10.0f, float z = 5.0f)
-        : position(x, y, z), velocity(0.0f)
-    {}
-    
-    glm::vec3 getLookDirection() const {
-        float radYaw   = glm::radians(yaw);
-        float radPitch = glm::radians(pitch);
-        return glm::normalize(glm::vec3(
-            cos(radYaw) * cos(radPitch),
-            sin(radPitch),
-            sin(radYaw) * cos(radPitch)
-        ));
-    }
-
-    void updateLook(float xrel, float yrel) {
-        yaw   += xrel * 0.15f;
-        pitch -= yrel * 0.15f;
-        pitch = glm::clamp(pitch, -89.0f, 89.0f);
-    }
-
-    void applyInput(float dt) {
-        const bool* keys = SDL_GetKeyboardState(nullptr);
-
-        float rad = glm::radians(yaw);
-        glm::vec3 forward(cos(rad), 0.0f, sin(rad));
-        forward = glm::normalize(forward);
-        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0,1,0)));
-
-        glm::vec3 moveDir(0.0f);
-
-        if (keys[SDL_SCANCODE_W]) moveDir += forward;
-        if (keys[SDL_SCANCODE_S]) moveDir -= forward;
-        if (keys[SDL_SCANCODE_A]) moveDir -= right;
-        if (keys[SDL_SCANCODE_D]) moveDir += right;
-
-        if (glm::length(moveDir) > 0.001f) {
-            moveDir = glm::normalize(moveDir);
-        }
-
-        velocity.x = moveDir.x * moveSpeed;
-        velocity.z = moveDir.z * moveSpeed;
-
-        // Jump only when on ground
-        if (keys[SDL_SCANCODE_SPACE] && onGround) {
-            velocity.y = jumpStrength;
-            onGround = false;
-        }
-    }
-
-    void applyGravity(float dt) {
-        if (!onGround) {
-            velocity.y += GRAVITY * dt;
-            velocity.y = std::max(velocity.y, TERMINAL_VELOCITY);
-        }
-    }
-
-    void moveAndCollide(float dt) {
-        onGround = false;
-
-        // Horizontal movement (using wider hitbox)
-        glm::vec3 horizVel(velocity.x * dt, 0.0f, velocity.z * dt);
-        glm::vec3 newPos = position + horizVel;
-
-        AABB horizBox(newPos, HORIZONTAL_WIDTH, HORIZONTAL_HEIGHT);
-
-        // Horizontal collision check (walls)
-        int minX = floor(newPos.x - 1.0f);
-        int maxX = ceil(newPos.x + 1.0f);
-        int minY = floor(newPos.y - 0.1f);
-        int maxY = ceil(newPos.y + HORIZONTAL_HEIGHT);
-        int minZ = floor(newPos.z - 1.0f);
-        int maxZ = ceil(newPos.z + 1.0f);
-
-        for (int bx = minX; bx <= maxX; ++bx) {
-            for (int by = minY; by <= maxY; ++by) {
-                for (int bz = minZ; bz <= maxZ; ++bz) {
-                    if (!isSolid(bx, by, bz)) continue;
-
-                    AABB block(glm::vec3(bx + 0.5f, by + 0.5f, bz + 0.5f), 1.0f, 1.0f);
-
-                    if (horizBox.intersects(block)) {
-                        // Push out on smallest penetration axis (X or Z)
-                        float penX = std::min(horizBox.max.x - block.min.x, block.max.x - horizBox.min.x);
-                        float penZ = std::min(horizBox.max.z - block.min.z, block.max.z - horizBox.min.z);
-
-                        if (penX < penZ) {
-                            newPos.x += (newPos.x > bx + 0.5f ? penX : -penX);
-                            velocity.x = 0.0f;
-                        } else {
-                            newPos.z += (newPos.z > bz + 0.5f ? penZ : -penZ);
-                            velocity.z = 0.0f;
-                        }
-                    }
-                }
-            }
-        }
-
-        position = newPos;
-
-        // Vertical movement (using taller hitbox)
-        glm::vec3 vertVel(0.0f, velocity.y * dt, 0.0f);
-        newPos = position + vertVel;
-
-        AABB vertBox(newPos, VERTICAL_WIDTH, VERTICAL_HEIGHT);
-
-        minY = floor(newPos.y - 0.1f);
-        maxY = ceil(newPos.y + VERTICAL_HEIGHT);
-
-        for (int bx = floor(position.x - 1.0f); bx <= ceil(position.x + 1.0f); ++bx) {
-            for (int by = minY; by <= maxY; ++by) {
-                for (int bz = floor(position.z - 1.0f); bz <= ceil(position.z + 1.0f); ++bz) {
-                    if (!isSolid(bx, by, bz)) continue;
-
-                    AABB block(glm::vec3(bx + 0.5f, by + 0.5f, bz + 0.5f), 1.0f, 1.0f);
-
-                    if (vertBox.intersects(block)) {
-                        if (velocity.y < 0) {  // Falling → land on top
-                            newPos.y = by + 1.0f + 0.01f;  // small lift
-                            velocity.y = 0.0f;
-                            onGround = true;
-                        } else if (velocity.y > 0) {  // Jumping up → hit head
-                            newPos.y = by - VERTICAL_HEIGHT - 0.01f;
-                            velocity.y = 0.0f;
-                        }
-                    }
-                }
-            }
-        }
-
-        position = newPos;
-
-        // Final ground check (feet raycast with tall hitbox width)
-        if (!onGround) {
-            int footY = floor(position.y - 0.05f);
-            if (isSolid(floor(position.x), footY, floor(position.z)) ||
-                isSolid(floor(position.x), footY, ceil(position.z)) ||
-                isSolid(ceil(position.x), footY, floor(position.z)) ||
-                isSolid(ceil(position.x), footY, ceil(position.z))) {
-                onGround = true;
-                velocity.y = 0.0f;
-                position.y = footY + 1.0f + 0.01f;
-            }
-        }
-
-        // Friction when on ground
-        if (onGround) {
-            velocity.x *= 0.8f;
-            velocity.z *= 0.8f;
-            if (std::abs(velocity.x) < 0.01f) velocity.x = 0.0f;
-            if (std::abs(velocity.z) < 0.01f) velocity.z = 0.0f;
-        }
-    }
-};
-
-Player player(0.0f, 100.0f, 5.0f);
 
 // ─── Texture Loading ────────────────────────────────────────────────────────
 
@@ -787,6 +743,13 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
+uint64_t hash_coords(int x, int z, uint64_t seed = 123456789ULL) {
+    uint64_t h = seed;
+    h ^= static_cast<uint64_t>(x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= static_cast<uint64_t>(z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+
 void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     string ckey = chunkKey(cx, cz);
 
@@ -1112,11 +1075,11 @@ int main(int argc, char* argv[]) {
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glm::vec3 PlayerCamPos(player.position.x, player.position.y + 1, player.position.z);
+
         glm::mat4 view = glm::lookAt(
-            PlayerCamPos,
-            PlayerCamPos + player.getLookDirection(),
-            glm::vec3(0, 1,0)
+            player.position,
+            player.position + player.getLookDirection(),
+            glm::vec3(0,1,0)
         );
 
         glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1280.0f / 720.0f, 0.1f, 200.0f);
