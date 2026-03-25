@@ -99,6 +99,7 @@ public:
     float breakCooldown = 0.0f;
     const float BREAK_COOLDOWN_TIME = 0.3f;
     bool onGround = false;
+    int selectedBlockType = 1;
 
     // Gravity constants
     static constexpr float GRAVITY = 0.0f;         // m/s²
@@ -153,6 +154,7 @@ public:
             onGround = false;
         }
         velocity.y *= 0.8;
+        breakCooldown -= 0.1;
     }
 
     void applyGravity(float dt) {
@@ -223,6 +225,11 @@ public:
         // If no collision downward and not on ground, apply gravity
         if (!collided && !onGround && velocity.y < 0) {
             onGround = false;
+        }
+    }
+    void selectBlock(int type){
+        if (type >= 1 && type <= 6){
+            selectedBlockType = type;
         }
     }
 };
@@ -743,13 +750,6 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
-uint64_t hash_coords(int x, int z, uint64_t seed = 123456789ULL) {
-    uint64_t h = seed;
-    h ^= static_cast<uint64_t>(x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= static_cast<uint64_t>(z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    return h;
-}
-
 void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
     string ckey = chunkKey(cx, cz);
 
@@ -1050,10 +1050,9 @@ int main(int argc, char* argv[]) {
                     runningThreads.store(false);  // signal threads to stop early
                 }
 
-                // Break on E
-                if (e.key.key == SDLK_E) {
-                    cout << "E pressed - trying to break" << endl;
-                    tryBreakInFront();
+                if (e.key.key >= SDLK_1 && e.key.key <= SDLK_6){
+                    int type = e.key.key - SDLK_0;
+                    player.selectBlock(type);
                 }
             }
 
