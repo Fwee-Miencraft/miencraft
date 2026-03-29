@@ -336,7 +336,7 @@ GLuint LoadTexture(const string& filename) {
     SDL_Surface* raw = IMG_Load(fullpath.c_str());
     if (!raw) {
         cout << "Failed to load " << filename << ": " << SDL_GetError() << endl;
-        raw = IMG_Load((string(SDL_GetBasePath()) + "Assets/error.png").c_str());
+        raw = IMG_Load((string(SDL_GetBasePath()) + "Assets/textures/error.png").c_str());
     }
 
     SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
