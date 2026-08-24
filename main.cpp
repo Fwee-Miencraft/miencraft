@@ -20,6 +20,12 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+#include <unordered_set>
 
 using namespace std;
 
@@ -30,13 +36,27 @@ GLuint hotbarVAO = 0;
 GLuint hotbarVBO = 0;
 GLint hotbarTextureID = 0;
 
+unordered_set<string> queuedChunks;
 unordered_map<string, string> worldBlocks;
 unordered_map<string, GLuint> Textures;
 std::atomic<bool> runningThreads{true};
 mutex worldBlocksMutex;
+mutex chunksMutex;
 SDL_AudioStream* BackGroundMusic = nullptr;
 Uint8* musicBuffer = nullptr;
 Uint32 musicLength = 0;
+
+struct ChunkRequest {
+    int cx;
+    int cz;
+};
+
+std::queue<ChunkRequest> chunkQueue;
+std::mutex chunkQueueMutex;
+std::condition_variable chunkCondition;
+
+std::thread chunkWorker;
+std::atomic<bool> chunkWorkerRunning{true};
 
 vector<tuple<string, string, string>> TextureAtlas = {
     {"grass_top.png", "grass.png",     "dirt.png"},
@@ -57,8 +77,6 @@ unordered_map<string, int> KeyMapper = {
 };
 
 mt19937 rng;
-
-queue<pair<int,int>> chunkQueue;
 
 vector<string> playlist = {
     "Assets/sound/minecraft.wav",
@@ -265,6 +283,8 @@ bool PlayMusic(SDL_AudioDeviceID device, const char* file)
     return true;
 }
 
+void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL);
+
 bool LoadSong(const string& file, SDL_AudioSpec& spec)
 {
     if (musicBuffer)
@@ -465,6 +485,25 @@ struct Chunk {
 };
 unordered_map<string, Chunk> chunks;
 
+struct ChunkMesh
+{
+    int cx;
+    int cz;
+
+    unordered_map<GLuint, vector<Vertex>> vertexGroups;
+};
+
+ChunkMesh buildChunkMeshCPU(const Chunk& chunk)
+{
+    ChunkMesh mesh;
+    mesh.cx = chunk.cx;
+    mesh.cz = chunk.cz;
+
+    // Your existing block/face generation code goes here.
+
+    return mesh;
+}
+
 string chunkKey(int cx, int cz) {
     return to_string(cx) + "_" + to_string(cz);
 }
@@ -585,6 +624,41 @@ void buildChunkMesh(Chunk& chunk) {
     chunk.dirty = false;
 }
 
+void chunkWorkerFunction()
+{
+    while (chunkWorkerRunning)
+    {
+        ChunkRequest request;
+
+        {
+            std::unique_lock<std::mutex> lock(chunkQueueMutex);
+
+            chunkCondition.wait(lock, [] {
+                return !chunkQueue.empty() || !chunkWorkerRunning;
+            });
+
+            if (!chunkWorkerRunning)
+                return;
+
+            request = chunkQueue.front();
+            chunkQueue.pop();
+        }
+
+                GenerateChunk(request.cx, request.cz);
+
+        // Get the generated chunk
+        string key = chunkKey(request.cx, request.cz);
+
+        auto it = chunks.find(key);
+        if (it != chunks.end())
+        {
+            ChunkMesh mesh = buildChunkMeshCPU(it->second);
+
+            // Put mesh into completed-mesh queue here
+        }
+    }
+}
+
 class Perlin {
 private:
     vector<int> p;  // permutation table
@@ -664,25 +738,34 @@ public:
 
 // ─── Chunk Generation ──────────────────────────────────────────────────────
 
-void AddBlock(int x, int y, int z, string type, bool Overwrite = false) {
+void AddBlock(int x, int y, int z, string type, bool Overwrite = false)
+{
     string key = posKey(x, y, z);
 
-    lock_guard<mutex> lock(worldBlocksMutex);  // protect map
+    {
+        lock_guard<mutex> lock(worldBlocksMutex);
 
-    if (Overwrite || worldBlocks.count(key) == 0) {
+        if (!Overwrite && worldBlocks.count(key) != 0)
+            return;
+
         worldBlocks[key] = type;
+    }
 
-        // Your existing dirty marking...
-        int cx = x / 16;
-        int cz = z / 16;
+    {
+        lock_guard<mutex> chunkLock(chunksMutex);
+
+        int cx = static_cast<int>(floor(x / 16.0));
+        int cz = static_cast<int>(floor(z / 16.0));
 
         for (int dx = -1; dx <= 1; ++dx) {
             for (int dz = -1; dz <= 1; ++dz) {
+
                 string nkey = chunkKey(cx + dx, cz + dz);
+
                 auto it = chunks.find(nkey);
-                if (it != chunks.end()) {
+
+                if (it != chunks.end())
                     it->second.dirty = true;
-                }
             }
         }
     }
@@ -750,14 +833,24 @@ void AddLotsOfBlocks(int startX, int startY, int startZ, int len, int height, in
     }
 }
 
-void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
+void GenerateChunk(int cx, int cz, uint64_t seed) {
+
     string ckey = chunkKey(cx, cz);
 
-    // Use try_emplace to construct in-place (no copy)
-    auto [it, inserted] = chunks.try_emplace(ckey, cx, cz);
-    if (!inserted) return;  // already exists
+    Chunk* chPtr = nullptr;
 
-    Chunk& ch = it->second;
+    {
+        lock_guard<mutex> lock(chunksMutex);
+
+        auto [it, inserted] = chunks.try_emplace(ckey, cx, cz);
+
+        if (!inserted)
+            return;
+
+        chPtr = &it->second;
+    }
+
+    Chunk& ch = *chPtr;
     ch.dirty = true;
 
     Perlin perlin(seed);
@@ -806,25 +899,26 @@ void GenerateChunk(int cx, int cz, uint64_t seed = 123456789ULL) {
 }
 
 
-void UpdateChunks() {
+void UpdateChunks()
+{
     int px = floor(player.position.x / 16.0f);
     int pz = floor(player.position.z / 16.0f);
 
-    const int LOAD_RADIUS = 4;
+    const int LOAD_RADIUS = 8;
 
-    for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx) {
-        for (int dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; ++dz) {
+    for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx)
+    {
+        for (int dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; ++dz)
+        {
             int cx = px + dx;
             int cz = pz + dz;
+
             string ckey = chunkKey(cx, cz);
 
-            if (chunks.find(ckey) == chunks.end()) {
-                // Launch async generation
-            auto fut = std::async(std::launch::async, [cx, cz]() {
-            if (!runningThreads.load()) return;
-                GenerateChunk(cx, cz);
-            });
-            }
+            if (chunks.find(ckey) != chunks.end())
+                continue;
+
+            GenerateChunk(cx, cz);
         }
     }
 }
@@ -943,6 +1037,8 @@ int main(int argc, char* argv[]) {
     createShader();
     createHudShader();
     glUseProgram(shaderProgram);
+
+    //chunkWorker = std::thread(chunkWorkerFunction);
 
     // Load textures
     Textures["grass_top.png"] = LoadTexture("grass_top.png");
