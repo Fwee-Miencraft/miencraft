@@ -11,6 +11,7 @@
 #include <atomic>
 #include <queue>
 #include <algorithm>
+#include <climits>
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -315,9 +316,14 @@ bool PlayNextSong(SDL_AudioDeviceID device, SDL_AudioSpec& spec)
     return true;
 }
 
-bool isSolid(int x, int y, int z) {
+bool isSolid(int x, int y, int z)
+{
+    lock_guard<mutex> lock(worldBlocksMutex);
+
     auto it = worldBlocks.find(posKey(x, y, z));
-    return (it != worldBlocks.end()) && (it->second != "air");
+
+    return (it != worldBlocks.end()) &&
+           (it->second != "air");
 }
 
 tuple<int,int,int> ParseCoords(const string& str) {
@@ -504,6 +510,8 @@ ChunkMesh buildChunkMeshCPU(const Chunk& chunk)
     return mesh;
 }
 
+mutex queuedChunksMutex;
+
 string chunkKey(int cx, int cz) {
     return to_string(cx) + "_" + to_string(cz);
 }
@@ -631,7 +639,7 @@ void chunkWorkerFunction()
         ChunkRequest request;
 
         {
-            std::unique_lock<std::mutex> lock(chunkQueueMutex);
+            unique_lock<mutex> lock(chunkQueueMutex);
 
             chunkCondition.wait(lock, [] {
                 return !chunkQueue.empty() || !chunkWorkerRunning;
@@ -644,21 +652,19 @@ void chunkWorkerFunction()
             chunkQueue.pop();
         }
 
-                GenerateChunk(request.cx, request.cz);
+        // Generate the chunk in the background
+        GenerateChunk(request.cx, request.cz);
 
-        // Get the generated chunk
-        string key = chunkKey(request.cx, request.cz);
-
-        auto it = chunks.find(key);
-        if (it != chunks.end())
+        // Remove it from the queued list
         {
-            ChunkMesh mesh = buildChunkMeshCPU(it->second);
+            lock_guard<mutex> lock(queuedChunksMutex);
 
-            // Put mesh into completed-mesh queue here
+            queuedChunks.erase(
+                chunkKey(request.cx, request.cz)
+            );
         }
     }
 }
-
 class Perlin {
 private:
     vector<int> p;  // permutation table
@@ -904,7 +910,10 @@ void UpdateChunks()
     int px = floor(player.position.x / 16.0f);
     int pz = floor(player.position.z / 16.0f);
 
-    const int LOAD_RADIUS = 8;
+    const int LOAD_RADIUS = 6;
+    const int MAX_CHUNKS_PER_UPDATE = 2;
+
+    vector<pair<int, int>> chunksToGenerate;
 
     for (int dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; ++dx)
     {
@@ -918,8 +927,35 @@ void UpdateChunks()
             if (chunks.find(ckey) != chunks.end())
                 continue;
 
-            GenerateChunk(cx, cz);
+            chunksToGenerate.push_back({cx, cz});
         }
+    }
+
+    // Closest chunks first
+    sort(chunksToGenerate.begin(), chunksToGenerate.end(),
+        [px, pz](const auto& a, const auto& b)
+        {
+            int adx = a.first - px;
+            int adz = a.second - pz;
+
+            int bdx = b.first - px;
+            int bdz = b.second - pz;
+
+            return adx * adx + adz * adz <
+                   bdx * bdx + bdz * bdz;
+        });
+
+    // Only generate a couple per update
+    int count = 0;
+
+    for (auto& [cx, cz] : chunksToGenerate)
+    {
+        GenerateChunk(cx, cz);
+
+        count++;
+
+        if (count >= MAX_CHUNKS_PER_UPDATE)
+            break;
     }
 }
 
@@ -1038,8 +1074,6 @@ int main(int argc, char* argv[]) {
     createHudShader();
     glUseProgram(shaderProgram);
 
-    //chunkWorker = std::thread(chunkWorkerFunction);
-
     // Load textures
     Textures["grass_top.png"] = LoadTexture("grass_top.png");
     Textures["grass.png"]     = LoadTexture("grass.png");
@@ -1091,6 +1125,7 @@ int main(int argc, char* argv[]) {
     glBindVertexArray(0);
 
     GenerateChunk(0, 0);
+    chunkWorker = std::thread(chunkWorkerFunction);
 
     bool running = true;
     SDL_Event e;
@@ -1160,13 +1195,24 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        // Input handling
         player.applyInput(dt);
 
         // Physics + collision
         player.applyGravity(dt);
         player.moveAndCollide(dt);
-        UpdateChunks();
+
+        static Uint64 lastChunkUpdate = 0;
+
+        Uint64 nowForChunks = SDL_GetPerformanceCounter();
+        double chunkUpdateTime =
+        (double)(nowForChunks - lastChunkUpdate) /
+        SDL_GetPerformanceFrequency();
+
+        if (chunkUpdateTime >= 0.05)
+        {
+            UpdateChunks();
+        lastChunkUpdate = nowForChunks;
+        }
 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1183,27 +1229,26 @@ int main(int argc, char* argv[]) {
 
         glUseProgram(shaderProgram);
         int rebuiltThisFrame = 0;
-        const int MAX_REBUILDS_PER_FRAME = 1;
+        const int MAX_REBUILDS_PER_FRAME = 2;
         frameCounter++;
-        for (auto& pair : chunks) {
+        lock_guard<mutex> lock(chunksMutex);
+
+        for (auto& pair : chunks)
+        {
             Chunk& chunk = pair.second;
 
-            if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
-                if (frameCounter % 2 == 0) {
-                    if (SDL_rand(2)+1 == 1){
-                        buildChunkMesh(chunk);
-                        rebuiltThisFrame++;
-                    }
-                }
-            }
+        if (chunk.dirty && rebuiltThisFrame < MAX_REBUILDS_PER_FRAME) {
+                    buildChunkMesh(chunk);
+                    rebuiltThisFrame++;
+        }
 
-            if (chunk.counts.empty()) continue;
+        if (chunk.counts.empty()) continue;
 
-            for (const auto& [texID, vao] : chunk.vaos) {
-                glBindTexture(GL_TEXTURE_2D, texID);
-                glBindVertexArray(vao);
-                glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
-            }
+        for (const auto& [texID, vao] : chunk.vaos) {
+            glBindTexture(GL_TEXTURE_2D, texID);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, chunk.counts.at(texID));
+        }
         }
         if (SDL_GetAudioStreamQueued(BackGroundMusic) == 0){
             PlayNextSong(device, spec);
@@ -1262,6 +1307,12 @@ int main(int argc, char* argv[]) {
         SDL_CloseAudioDevice(device);
         device = 0;
     }
+    cout << "Cleaning UP chunkworkerthreads...." << endl;
+    chunkWorkerRunning = false;
+    chunkCondition.notify_all();
+
+    if (chunkWorker.joinable())
+    chunkWorker.join();
 
     worldBlocks.clear();
     cout << "Cleared world blocks" << endl;
