@@ -30,7 +30,7 @@
 
 using namespace std;
 
-// ─── Globals ────────────────────────────────────────────────────────────────
+// ─── Globals ─────────
 
 GLuint hudShaderProgram = 0;
 GLuint hotbarVAO = 0;
@@ -90,7 +90,7 @@ int currentSong = 0;
 
 SDL_AudioDeviceID device;
 
-// ─── Helper Functions ───────────────────────────────────────────────────────
+// ─── Helper Functions ────
 
 
 string posKey(int x, int y, int z) {
@@ -120,8 +120,7 @@ public:
     bool onGround = false;
     int selectedBlockType = 1;
 
-    // Gravity constants
-    static constexpr float GRAVITY = 0.0f;         // m/s²
+    static constexpr float GRAVITY = 0.0f;
     static constexpr float TERMINAL_VELOCITY = -50.0f;
 
     Player(float x = 0.0f, float y = 10.0f, float z = 5.0f)
@@ -184,17 +183,12 @@ public:
     }
 
     void moveAndCollide(float dt) {
-        
-        // Proposed new position
         onGround = false;
         glm::vec3 newPos = position + velocity * dt;
 
-        // Create player bounding box at new position
         AABB newBox(newPos);
 
         bool collided = false;
-
-        // Check nearby blocks (simple 3x4x3 grid around player)
         int minX = floor(newPos.x - 1.0f);
         int maxX = ceil(newPos.x + 1.0f);
         int minY = floor(newPos.y - 1.0f);
@@ -240,8 +234,6 @@ public:
         }
 
         position = newPos;
-
-        // If no collision downward and not on ground, apply gravity
         if (!collided && !onGround && velocity.y < 0) {
             onGround = false;
         }
@@ -345,7 +337,7 @@ tuple<string,string,string> Find_tuple(const string& name) {
 
     int target = it->second;  // 1=grass, 2=dirt, 3=stone
 
-    int idx = 1;  // ← start at 1 to skip error entry at 0
+    int idx = 1;
     for (const auto& tup : TextureAtlas) {
         if (idx == target) return tup;
         idx++;
@@ -355,7 +347,7 @@ tuple<string,string,string> Find_tuple(const string& name) {
     return {"grass_top.png", "grass.png", "dirt.png"};
 }
 
-// ─── Texture Loading ────────────────────────────────────────────────────────
+// ─── Texture Loading ───────
 
 GLuint LoadTexture(const string& filename) {
     string fullpath = string(SDL_GetBasePath()) + "Assets/textures/" + filename;
@@ -386,7 +378,7 @@ GLuint LoadTexture(const string& filename) {
     return tex;
 }
 
-// ─── Shader ─────────────────────────────────────────────────────────────────
+// ─── Shader ────────
 
 GLuint shaderProgram;
 
@@ -470,7 +462,7 @@ void createHudShader() {
     glDeleteShader(fshader);
 }
 
-// ─── Chunk & Mesh ───────────────────────────────────────────────────────────
+// ─── ChunkMesh ------
 
 struct Vertex { float x,y,z, u,v; };
 
@@ -481,12 +473,8 @@ struct Chunk {
     unordered_map<GLuint, GLsizei> counts;
     bool dirty = true;
 
-    // Add this constructor
     Chunk(int cx_, int cz_) : cx(cx_), cz(cz_), dirty(true) {
-        // vaos/vbos/counts are default-constructed (empty)
     }
-
-    // Optional: default constructor if needed elsewhere
     Chunk() = default;
 };
 unordered_map<string, Chunk> chunks;
@@ -504,9 +492,6 @@ ChunkMesh buildChunkMeshCPU(const Chunk& chunk)
     ChunkMesh mesh;
     mesh.cx = chunk.cx;
     mesh.cz = chunk.cz;
-
-    // Your existing block/face generation code goes here.
-
     return mesh;
 }
 
@@ -517,7 +502,6 @@ string chunkKey(int cx, int cz) {
 }
 
 void buildChunkMesh(Chunk& chunk) {
-    // Clean up old data
     for (auto& p : chunk.vaos) glDeleteVertexArrays(1, &p.second);
     for (auto& p : chunk.vbos) glDeleteBuffers(1, &p.second);
     chunk.vaos.clear();
@@ -595,7 +579,6 @@ void buildChunkMesh(Chunk& chunk) {
 
                 // Bottom (-Y) - bottom texture
                 if (!isSolid(wx, wy - 1, wz)) {
-                    //cout << "Bottom face of " << type << " at (" << wx << "," << wy << "," << wz << ") using texture ID " << botTex << endl;
                     vertexGroups[botTex].push_back({wx-0.5f, wy-0.5f, wz-0.5f, 0,1});
                     vertexGroups[botTex].push_back({wx+0.5f, wy-0.5f, wz-0.5f, 1,1});
                     vertexGroups[botTex].push_back({wx+0.5f, wy-0.5f, wz+0.5f, 1,0});
@@ -607,7 +590,6 @@ void buildChunkMesh(Chunk& chunk) {
         }
     }
 
-    // Create one VAO/VBO per texture group
     for (auto& [texID, verts] : vertexGroups) {
         if (verts.empty()) continue;
 
@@ -667,7 +649,7 @@ void chunkWorkerFunction()
 }
 class Perlin {
 private:
-    vector<int> p;  // permutation table
+    vector<int> p;
 
     float fade(float t) const { return t * t * t * (t * (t * 6 - 15) + 10); }
     float lerp(float t, float a, float b) const { return a + t * (b - a); }
@@ -723,8 +705,6 @@ public:
             lerp(u, grad(p[AB], x, y-1), grad(p[BB], x-1, y-1))
         );
     }
-
-    // Fractional Brownian Motion (multiple octaves for detail)
     float fbm(float x, float y, int octaves = 6, float persistence = 0.5f) const {
         float total = 0;
         float frequency = 1.0f;
@@ -742,7 +722,7 @@ public:
     }
 };
 
-// ─── Chunk Generation ──────────────────────────────────────────────────────
+// ─── Chunk Generation ────────
 
 void AddBlock(int x, int y, int z, string type, bool Overwrite = false)
 {
@@ -887,13 +867,12 @@ void GenerateChunk(int cx, int cz, uint64_t seed) {
         int tx = cx * 16 + (rng() % 16);
         int tz = cz * 16 + (rng() % 16);
 
-        // Find the highest solid block that is grass or dirt
-        int surfaceY = -31;  // impossible low value
+        int surfaceY = -31;
 
         for (int y = -30; y <= 30; ++y) {
             string below = worldBlocks[posKey(tx, y, tz)];
             if (below == "grass" || below == "dirt") {
-                surfaceY = y;  // update to the highest one
+                surfaceY = y;
                 break;
             }
         }
@@ -945,7 +924,6 @@ void UpdateChunks()
                    bdx * bdx + bdz * bdz;
         });
 
-    // Only generate a couple per update
     int count = 0;
 
     for (auto& [cx, cz] : chunksToGenerate)
@@ -1015,24 +993,21 @@ void cleanupAllChunks() {
     }
     chunks.clear();
 
-    // Also clean up hotbar
     if (hotbarVAO != 0) glDeleteVertexArrays(1, &hotbarVAO);
     if (hotbarVBO != 0) glDeleteBuffers(1, &hotbarVBO);
     hotbarVAO = 0;
     hotbarVBO = 0;
 
-    // Delete all textures
     for (auto& [name, tex] : Textures) {
         if (tex != 0) glDeleteTextures(1, &tex);
     }
     Textures.clear();
 
-    // Delete shaders
     if (shaderProgram != 0) glDeleteProgram(shaderProgram);
     if (hudShaderProgram != 0) glDeleteProgram(hudShaderProgram);
 }
 
-// ─── Main ──────────────────────────────────────────────────────────────────
+// ─── Main ─────────
 
 int main(int argc, char* argv[]) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
@@ -1062,7 +1037,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Mouse setup - critical for macOS
+    // Mouse setup
     SDL_SetWindowRelativeMouseMode(window, true);
     SDL_HideCursor();
     SDL_RaiseWindow(window);
@@ -1168,7 +1143,7 @@ int main(int argc, char* argv[]) {
 
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
-                runningThreads.store(false);  // signal threads to stop early
+                runningThreads.store(false);  // signal threads to stop
             }
 
             if (e.type == SDL_EVENT_MOUSE_MOTION) {
@@ -1178,7 +1153,7 @@ int main(int argc, char* argv[]) {
             if (e.type == SDL_EVENT_KEY_DOWN) {
                 if (e.key.key == SDLK_ESCAPE){
                     running = false;
-                    runningThreads.store(false);  // signal threads to stop early
+                    runningThreads.store(false);
                 }
 
                 if (e.key.key >= SDLK_1 && e.key.key <= SDLK_6){
@@ -1197,7 +1172,6 @@ int main(int argc, char* argv[]) {
         }
         player.applyInput(dt);
 
-        // Physics + collision
         player.applyGravity(dt);
         player.moveAndCollide(dt);
 
